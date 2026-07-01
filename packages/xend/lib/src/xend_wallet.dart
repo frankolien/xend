@@ -1,4 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:flutter/services.dart' show PlatformException;
 
 import 'config.dart';
 import 'errors.dart';
@@ -62,7 +67,12 @@ class XendWallet {
   }) async {
     _requireSolana(chain, 'XendWallet.create');
     const channel = SecureChannel();
-    final address = await channel.generateKeyPair(_defaultWalletId);
+    final String address;
+    try {
+      address = await channel.generateKeyPair(_defaultWalletId);
+    } on PlatformException catch (e) {
+      throw _mapNativeError(e);
+    }
     await Xend.backend.registerWallet(address, label: label);
     return XendWallet._(_defaultWalletId, address, chain);
   }
@@ -98,9 +108,15 @@ class XendWallet {
   /// Returns the balance of [asset], or the chain's native asset when [asset] is
   /// omitted. The value is expressed in the asset's smallest indivisible unit.
   ///
-  /// Not yet available in this release; currently throws [NotImplementedYet].
-  Future<Balance> balance({Asset? asset}) {
-    throw const NotImplementedYet('XendWallet.balance');
+  /// Only native SOL is supported in this release; passing a token [asset] throws
+  /// [NotImplementedYet].
+  Future<Balance> balance({Asset? asset}) async {
+    _requireSolana(chain, 'XendWallet.balance');
+    if (asset?.mint != null) {
+      throw const NotImplementedYet('SPL token balances');
+    }
+    final amount = await Xend.backend.getBalance(address, mint: asset?.mint);
+    return Balance(asset: asset ?? Asset.native(chain), amount: amount);
   }
 
   /// Sends [amount] of [asset] to the address [to].
@@ -113,16 +129,19 @@ class XendWallet {
   /// [amount] is expressed in the asset's smallest indivisible unit (for example,
   /// lamports for SOL). [asset] defaults to the native asset of [chain]. Supply
   /// [idempotencyKey] to make a retry safe; if omitted, one is generated per call.
-  /// [successAt] selects the commitment level at which the transaction is considered
-  /// successful.
+  /// [successAt] selects the commitment level at which [watch] reports success.
+  ///
+  /// In this release the returned handle's id is the on-chain transaction signature,
+  /// which can be looked up on a block explorer. Only native SOL transfers are
+  /// supported; passing a token [asset] throws [NotImplementedYet].
   ///
   /// Throws:
   ///  * [InsufficientFunds] if the balance cannot cover the amount and fees.
   ///  * [InvalidRecipient] if [to] is not valid for [chain].
   ///  * [UserCancelledAuth] if biometric authentication is dismissed.
+  ///  * [BlockhashExpired] if the validity window elapsed before broadcast.
+  ///  * [ChainRejected] if the network rejected the transaction.
   ///  * [NetworkError] or [RateLimited] for transient failures that may be retried.
-  ///
-  /// Not yet available in this release; currently throws [NotImplementedYet].
   ///
   /// ```dart
   /// final tx = await wallet.send(to: recipient, amount: BigInt.from(1000000));
@@ -136,8 +155,49 @@ class XendWallet {
     Asset? asset,
     String? idempotencyKey,
     TxCommitment successAt = TxCommitment.confirmed,
-  }) {
-    throw const NotImplementedYet('XendWallet.send');
+  }) async {
+    _requireSolana(chain, 'XendWallet.send');
+    if (asset?.mint != null) {
+      throw const NotImplementedYet('SPL token transfers');
+    }
+    if (amount <= BigInt.zero) {
+      throw ArgumentError.value(amount, 'amount', 'must be greater than zero');
+    }
+
+    // 1. The backend assembles the unsigned transfer, fetching the recent blockhash the
+    //    device must not compute for itself.
+    final built = await Xend.backend.buildTransfer(
+      from: address,
+      to: to,
+      amount: amount,
+    );
+    final message = base64Decode(built.message);
+
+    // 2. Sign on-device behind biometric authentication. The private key never leaves the
+    //    device's secure hardware; only the 64-byte signature is returned.
+    final Uint8List signature;
+    try {
+      signature = await const SecureChannel().signMessage(
+        _walletId,
+        message,
+        'Approve sending to $to',
+      );
+    } on PlatformException catch (e) {
+      throw _mapNativeError(e);
+    }
+
+    // 3. Assemble the signed transaction in wire format and broadcast it. The idempotency
+    //    key makes the whole build-sign-submit round trip safe to retry.
+    final signed = _assembleSignedTransaction(signature, message);
+    final result = await Xend.backend.submitTransaction(
+      signed: base64Encode(signed),
+      idempotencyKey: idempotencyKey ?? _newIdempotencyKey(),
+      from: address,
+      to: to,
+      amount: amount,
+    );
+
+    return TxHandle(result.signature);
   }
 
   /// Returns the address at which this wallet can receive funds.
@@ -168,14 +228,25 @@ class XendWallet {
     throw const NotImplementedYet('XendWallet.bridge');
   }
 
-  /// Signs an arbitrary [message] on-device behind biometric authentication.
+  /// Signs an arbitrary [message] on-device behind biometric authentication and returns
+  /// the 64-byte Ed25519 signature.
   ///
-  /// [reason] is shown to the user in the authentication prompt so they can confirm
-  /// what they are approving.
+  /// [reason] is shown to the user in the authentication prompt so they can confirm what
+  /// they are approving. Useful for wallet-based sign-in and message signing, where the
+  /// caller needs a signature without moving funds.
   ///
-  /// Not yet available in this release; currently throws [NotImplementedYet].
-  Future<List<int>> sign(List<int> message, {required String reason}) {
-    throw const NotImplementedYet('XendWallet.sign');
+  /// Throws [UserCancelledAuth] if the biometric prompt is dismissed.
+  Future<List<int>> sign(List<int> message, {required String reason}) async {
+    _requireSolana(chain, 'XendWallet.sign');
+    try {
+      return await const SecureChannel().signMessage(
+        _walletId,
+        Uint8List.fromList(message),
+        reason,
+      );
+    } on PlatformException catch (e) {
+      throw _mapNativeError(e);
+    }
   }
 
   /// Returns a stream of [TxStatus] updates for the transaction identified by [handle].
@@ -201,5 +272,38 @@ class XendWallet {
     if (chain != Chain.solana) {
       throw NotImplementedYet('$call on ${chain.name}');
     }
+  }
+}
+
+/// Assembles a signed Solana transaction in wire format: the compact-u16 signature count
+/// (the byte `0x01` for a single signer), the 64-byte signature, then the serialized
+/// message. This is the exact byte layout the backend parses back before broadcasting.
+Uint8List _assembleSignedTransaction(Uint8List signature, Uint8List message) {
+  final builder = BytesBuilder();
+  builder.addByte(0x01);
+  builder.add(signature);
+  builder.add(message);
+  return builder.toBytes();
+}
+
+/// Generates a random 128-bit idempotency key as lowercase hex. A distinct key per call
+/// keeps sends independent, while a caller who wants retry safety can supply their own.
+String _newIdempotencyKey() {
+  final random = Random.secure();
+  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+  return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+/// Maps a native secure-element failure into a typed [XendError]. A cancelled biometric
+/// prompt is the case callers routinely branch on; other device failures surface as a
+/// retryable [NetworkError], since they mean the operation did not complete.
+XendError _mapNativeError(PlatformException e) {
+  switch (e.code) {
+    case 'user_cancelled_auth':
+      return const UserCancelledAuth();
+    case 'biometrics_unavailable':
+      return const NetworkError('Biometric authentication is unavailable on this device');
+    default:
+      return NetworkError('secure element error: ${e.message ?? e.code}');
   }
 }

@@ -22,6 +22,82 @@ class BackendClient {
     return body['wallet_id'] as String;
   }
 
+  /// `POST /v1/tx/build` — request an unsigned transfer for the device to sign.
+  ///
+  /// Returns the base64-encoded transaction [message] and the Unix second [validUntil]
+  /// after which it must be rebuilt rather than broadcast.
+  Future<({String message, int validUntil})> buildTransfer({
+    required String from,
+    required String to,
+    required BigInt amount,
+    String? mint,
+  }) async {
+    final body = await _post('/v1/tx/build', {
+      'from': from,
+      'to': to,
+      'amount': amount.toString(),
+      if (mint != null) 'mint': mint,
+    });
+    return (
+      message: body['message'] as String,
+      validUntil: body['valid_until'] as int,
+    );
+  }
+
+  /// `POST /v1/tx/submit` — broadcast a signed transaction.
+  ///
+  /// [signed] is the base64-encoded, fully-signed transaction. [idempotencyKey] makes a
+  /// retry safe: submitting the same key twice returns the original signature instead of
+  /// broadcasting again. The remaining fields are recorded for history. Returns the
+  /// on-chain [signature] and its recorded [status].
+  Future<({String signature, String status})> submitTransaction({
+    required String signed,
+    required String idempotencyKey,
+    String? from,
+    String? to,
+    BigInt? amount,
+    String? mint,
+  }) async {
+    final body = await _post('/v1/tx/submit', {
+      'signed': signed,
+      'idempotency_key': idempotencyKey,
+      if (from != null) 'pubkey': from,
+      if (to != null) 'to': to,
+      if (amount != null) 'amount': amount.toString(),
+      if (mint != null) 'mint': mint,
+    });
+    return (
+      signature: body['signature'] as String,
+      status: body['status'] as String,
+    );
+  }
+
+  /// `GET /v1/wallets/:pubkey/balance` — the wallet's balance in base units.
+  Future<BigInt> getBalance(String pubkey, {String? mint}) async {
+    final query = mint != null ? '?mint=$mint' : '';
+    final body = await _get('/v1/wallets/$pubkey/balance$query');
+    return BigInt.parse(body['amount'] as String);
+  }
+
+  Future<Map<String, dynamic>> _get(String path) async {
+    final http.Response resp;
+    try {
+      resp = await _client.get(
+        Uri.parse('$baseUrl$path'),
+        headers: const {'content-type': 'application/json'},
+      );
+    } on Exception {
+      throw const NetworkError();
+    }
+
+    final decoded = resp.body.isEmpty
+        ? const <String, dynamic>{}
+        : jsonDecode(resp.body) as Map<String, dynamic>;
+
+    if (resp.statusCode >= 400) throw _mapError(resp.statusCode, decoded);
+    return decoded;
+  }
+
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> json) async {
     final http.Response resp;
     try {
