@@ -1,0 +1,28 @@
+name: xend_sdk
+description: >-
+  Embedded, non-custodial payments for mobile apps. Keys never leave the device.
+  Chain-agnostic API; Solana implementation in v0.1.
+version: 0.1.0
+publish_to: none # not published while pre-1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Deliberately minimal. The SDK talks HTTP/WS to the backend and the platform
+  # channel to native — no Solana/crypto package leaks into the public surface.
+  http: ^1.2.0 # backend REST client; web-socket client is added in Phase 5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  plugin:
+    platforms:
+      ios:
+        pluginClass: XendSecurePlugin # bridges MethodChannel ai.xend/secure
