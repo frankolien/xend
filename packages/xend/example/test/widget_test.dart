@@ -4,7 +4,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xend_example/main.dart';
-import 'package:xend_sdk/xend_sdk.dart';
+import 'package:xend/xend.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

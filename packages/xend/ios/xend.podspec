@@ -3,7 +3,7 @@
 # The Swift under Classes/ owns keys, storage, biometrics, and the Ed25519 signature.
 #
 Pod::Spec.new do |s|
-  s.name             = 'xend_sdk'
+  s.name             = 'xend'
   s.version          = '0.1.0'
   s.summary          = 'Xend — embedded, non-custodial payments. Native vault.'
   s.description      = 'On-device Ed25519 keygen, Keychain storage, and (Phase 2) biometric signing.'

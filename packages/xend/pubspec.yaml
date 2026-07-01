@@ -1,9 +1,12 @@
-name: xend_sdk
+name: xend
 description: >-
   Embedded, non-custodial payments for mobile apps. Keys never leave the device.
   Chain-agnostic API; Solana implementation in v0.1.
 version: 0.1.0
-publish_to: none # not published while pre-1.0
+publish_to: none # remove to publish to pub.dev (kept while pre-1.0)
+homepage: https://github.com/EntryPointLabs/xend
+repository: https://github.com/EntryPointLabs/xend
+issue_tracker: https://github.com/EntryPointLabs/xend/issues
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

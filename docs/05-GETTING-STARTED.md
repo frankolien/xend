@@ -21,7 +21,7 @@ curl -s localhost:8080/health                  # → ok
 
 ## 2. The example app
 ```bash
-cd packages/xend_sdk/example
+cd packages/xend/example
 flutter pub get
 open -a Simulator                              # boot an iOS simulator
 flutter run                                    # pick the simulator
@@ -47,7 +47,7 @@ your machine's LAN IP.
 
 ## Verify the abstraction hasn't leaked
 ```bash
-cd packages/xend_sdk/example
+cd packages/xend/example
 grep -rniE 'solana|blockhash|ed25519|rpc' lib/    # → zero hits
 ```
 The sample app knows nothing about the chain. That's the whole point (docs/00-PRD.md #4).

@@ -35,10 +35,10 @@ xend/
 │   ├── 04-SECURITY.md          # threat model + mitigations
 │   └── 05-GETTING-STARTED.md   # run the backend + example app
 ├── packages/
-│   └── xend_sdk/               # THE PRODUCT: a Flutter plugin package.
+│   └── xend/               # THE PRODUCT: a Flutter plugin package.
 │       ├── lib/                #   Dart: chain-agnostic API, channel + backend client
 │       ├── ios/Classes/        #   THE VAULT (Swift): four methods, keys live here
-│       └── example/            #   sample app — imports ONLY package:xend_sdk
+│       └── example/            #   sample app — imports ONLY package:xend
 └── backend/                    # THE WITNESS: Rust (Axum/Tokio/sqlx). Never signs.
 ```
 
@@ -58,7 +58,7 @@ xend/
 | Backend (Rust) | **✅ Phase 1**: builds; `/health` + `POST /v1/wallets` (base58-validated, idempotent) proven against real Postgres |
 | Native vault (Swift) | **✅ Phase 1**: Ed25519 keygen (verified) + base58 + Keychain; compiles via Xcode/CocoaPods into the app. `signMessage` = Phase 2 |
 | SDK (Dart) | **✅ Phase 1**: `create`/`load`/`delete` wired to native + backend; analyzes clean; widget tests pass. `send`/`balance`/`watch` = Phase 2+ |
-| Flutter example | **✅ builds** for iOS simulator; imports only `package:xend_sdk`. Final tap-test: run per [docs/05](docs/05-GETTING-STARTED.md) |
+| Flutter example | **✅ builds** for iOS simulator; imports only `package:xend`. Final tap-test: run per [docs/05](docs/05-GETTING-STARTED.md) |
 
 **Next: Phase 2** — the signing path (`tx/build` → Face-ID `signMessage` → `tx/submit` → confirm) on Solana devnet.
 

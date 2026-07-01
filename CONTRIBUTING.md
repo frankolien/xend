@@ -21,7 +21,7 @@ See [`docs/05-GETTING-STARTED.md`](docs/05-GETTING-STARTED.md).
 docker compose up -d --wait postgres
 cd backend && cargo run          # backend on :8080
 # in another shell:
-cd packages/xend_sdk/example && flutter run
+cd packages/xend/example && flutter run
 ```
 
 ## Before you open a PR
@@ -31,11 +31,11 @@ cd packages/xend_sdk/example && flutter run
 cd backend && cargo fmt && cargo clippy && cargo test
 
 # SDK + example
-cd packages/xend_sdk && dart format . && flutter analyze
+cd packages/xend && dart format . && flutter analyze
 cd example && flutter analyze && flutter test
 
 # Native vault (types only, without a full iOS build)
-cd packages/xend_sdk/ios/Classes && swiftc -typecheck Base58.swift SecureSigner.swift
+cd packages/xend/ios/Classes && swiftc -typecheck Base58.swift SecureSigner.swift
 ```
 
 ## Commit style

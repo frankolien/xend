@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:xend_sdk/xend_sdk.dart';
+import 'package:xend/xend.dart';
 
-// NOTE: this file imports ONLY package:xend_sdk (and Flutter). No solana, no crypto,
+// NOTE: this file imports ONLY package:xend (and Flutter). No solana, no crypto,
 // no RPC, no "blockhash". That is the SDK abstraction test (docs/00-PRD.md invariant 4).
 
 void main() {
