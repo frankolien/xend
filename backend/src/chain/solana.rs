@@ -68,34 +68,33 @@ impl ChainAdapter for SolanaAdapter {
     }
 
     async fn build_transfer(&self, intent: &TransferIntent) -> Result<UnsignedTx, AppError> {
-        if intent.mint.is_some() {
-            return Err(AppError::BadRequest(
-                "SPL token transfers are not yet supported".into(),
-            ));
-        }
-
         let from = Pubkey::from_str(&intent.from)
             .map_err(|_| AppError::BadRequest("invalid sender address".into()))?;
         let to = Pubkey::from_str(&intent.to).map_err(|_| AppError::InvalidRecipient)?;
-        let lamports = u64::try_from(intent.amount)
-            .map_err(|_| AppError::BadRequest("amount exceeds the maximum for SOL".into()))?;
 
-        // System Program transfer instruction: a 4-byte little-endian discriminant (2)
-        // followed by the lamport amount as a little-endian u64. Accounts are the sender
-        // (writable signer) and the recipient (writable).
-        let system_program = Pubkey::from_str("11111111111111111111111111111111")
-            .expect("valid system program id");
-        let mut data = Vec::with_capacity(12);
-        data.extend_from_slice(&2u32.to_le_bytes());
-        data.extend_from_slice(&lamports.to_le_bytes());
-        let instruction = Instruction {
-            program_id: system_program,
-            accounts: vec![AccountMeta::new(from, true), AccountMeta::new(to, false)],
-            data,
+        // A native transfer is one System instruction; a token transfer is an idempotent
+        // "create the recipient's associated token account" followed by a checked token
+        // transfer between the two owners' associated accounts.
+        let instructions = match &intent.mint {
+            None => vec![system_transfer(&from, &to, intent.amount)?],
+            Some(mint) => {
+                let mint = Pubkey::from_str(mint)
+                    .map_err(|_| AppError::BadRequest("invalid mint".into()))?;
+                let amount = u64::try_from(intent.amount).map_err(|_| {
+                    AppError::BadRequest("amount exceeds the maximum for this token".into())
+                })?;
+                let decimals = self.mint_decimals(&mint).await?;
+                let source_ata = associated_token_address(&from, &mint);
+                let dest_ata = associated_token_address(&to, &mint);
+                vec![
+                    create_ata_idempotent(&from, &to, &mint, &dest_ata),
+                    token_transfer_checked(&source_ata, &mint, &dest_ata, &from, amount, decimals),
+                ]
+            }
         };
 
         let blockhash = self.latest_blockhash().await?;
-        let message = Message::new_with_blockhash(&[instruction], Some(&from), &blockhash);
+        let message = Message::new_with_blockhash(&instructions, Some(&from), &blockhash);
 
         Ok(UnsignedTx {
             message: message.serialize(),
@@ -188,15 +187,19 @@ impl ChainAdapter for SolanaAdapter {
     }
 
     async fn balance(&self, address: &str, mint: Option<&str>) -> Result<u128, AppError> {
-        if mint.is_some() {
-            return Err(AppError::BadRequest(
-                "SPL token balances are not yet supported".into(),
-            ));
-        }
-
         // Reject a malformed address before spending an RPC round trip on it.
         Pubkey::from_str(address).map_err(|_| AppError::BadRequest("invalid address".into()))?;
 
+        match mint {
+            None => self.native_balance(address).await,
+            Some(mint) => self.token_balance(address, mint).await,
+        }
+    }
+}
+
+impl SolanaAdapter {
+    /// The address's native SOL balance in lamports, via `getBalance`.
+    async fn native_balance(&self, address: &str) -> Result<u128, AppError> {
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -225,6 +228,174 @@ impl ChainAdapter for SolanaAdapter {
             .as_u64()
             .ok_or_else(|| AppError::Network("getBalance returned no value".into()))?;
         Ok(u128::from(lamports))
+    }
+
+    /// The address's balance of an SPL token, in the token's base units. Sums every token
+    /// account the owner holds for `mint` (normally just the associated token account);
+    /// an owner with no such account has a zero balance.
+    async fn token_balance(&self, owner: &str, mint: &str) -> Result<u128, AppError> {
+        Pubkey::from_str(mint).map_err(|_| AppError::BadRequest("invalid mint".into()))?;
+
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTokenAccountsByOwner",
+            "params": [owner, { "mint": mint }, { "encoding": "jsonParsed" }],
+        });
+
+        let response = self
+            .http
+            .post(&self.rpc_url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Network(format!("rpc request failed: {e}")))?;
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AppError::Network(format!("rpc decode failed: {e}")))?;
+
+        if let Some(error) = body.get("error") {
+            return Err(AppError::Network(format!(
+                "getTokenAccountsByOwner failed: {error}"
+            )));
+        }
+
+        let accounts = body["result"]["value"]
+            .as_array()
+            .ok_or_else(|| AppError::Network("getTokenAccountsByOwner returned no value".into()))?;
+
+        let mut total: u128 = 0;
+        for account in accounts {
+            let amount = account["account"]["data"]["parsed"]["info"]["tokenAmount"]["amount"]
+                .as_str()
+                .ok_or_else(|| AppError::Network("token account missing amount".into()))?;
+            let parsed: u128 = amount
+                .parse()
+                .map_err(|_| AppError::Network("token amount is not an integer".into()))?;
+            total = total.saturating_add(parsed);
+        }
+        Ok(total)
+    }
+
+    /// Reads a token mint's decimal precision via `getTokenSupply`. `transferChecked`
+    /// requires the caller to pass the mint's decimals, which the client does not send, so
+    /// the backend resolves it here.
+    async fn mint_decimals(&self, mint: &Pubkey) -> Result<u8, AppError> {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getTokenSupply",
+            "params": [mint.to_string()],
+        });
+
+        let response = self
+            .http
+            .post(&self.rpc_url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Network(format!("rpc request failed: {e}")))?;
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AppError::Network(format!("rpc decode failed: {e}")))?;
+
+        let decimals = body["result"]["value"]["decimals"].as_u64().ok_or_else(|| {
+            AppError::BadRequest("mint not found or is not a token mint".into())
+        })?;
+        u8::try_from(decimals).map_err(|_| AppError::Network("invalid mint decimals".into()))
+    }
+}
+
+/// SPL Token program.
+const TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+/// Associated Token Account program, which derives and creates a wallet's canonical token
+/// account for a given mint.
+const ASSOCIATED_TOKEN_PROGRAM_ID: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+/// System program.
+const SYSTEM_PROGRAM_ID: &str = "11111111111111111111111111111111";
+
+fn program(id: &str) -> Pubkey {
+    Pubkey::from_str(id).expect("valid built-in program id")
+}
+
+/// A System Program transfer of `amount` lamports from `from` (writable signer) to `to`
+/// (writable). The instruction data is the discriminant `2` (u32 LE) then the amount
+/// (u64 LE).
+fn system_transfer(from: &Pubkey, to: &Pubkey, amount: u128) -> Result<Instruction, AppError> {
+    let lamports = u64::try_from(amount)
+        .map_err(|_| AppError::BadRequest("amount exceeds the maximum for SOL".into()))?;
+    let mut data = Vec::with_capacity(12);
+    data.extend_from_slice(&2u32.to_le_bytes());
+    data.extend_from_slice(&lamports.to_le_bytes());
+    Ok(Instruction {
+        program_id: program(SYSTEM_PROGRAM_ID),
+        accounts: vec![AccountMeta::new(*from, true), AccountMeta::new(*to, false)],
+        data,
+    })
+}
+
+/// Derives the canonical associated token account for `owner` and `mint`: the program
+/// address of `[owner, token_program, mint]` under the Associated Token Account program.
+fn associated_token_address(owner: &Pubkey, mint: &Pubkey) -> Pubkey {
+    let token_program = program(TOKEN_PROGRAM_ID);
+    let (address, _bump) = Pubkey::find_program_address(
+        &[owner.as_ref(), token_program.as_ref(), mint.as_ref()],
+        &program(ASSOCIATED_TOKEN_PROGRAM_ID),
+    );
+    address
+}
+
+/// An idempotent "create associated token account" instruction: it creates `ata` for
+/// `owner`/`mint`, funded by `funder`, and is a no-op if the account already exists. The
+/// single data byte `1` selects the idempotent variant.
+fn create_ata_idempotent(
+    funder: &Pubkey,
+    owner: &Pubkey,
+    mint: &Pubkey,
+    ata: &Pubkey,
+) -> Instruction {
+    Instruction {
+        program_id: program(ASSOCIATED_TOKEN_PROGRAM_ID),
+        accounts: vec![
+            AccountMeta::new(*funder, true),
+            AccountMeta::new(*ata, false),
+            AccountMeta::new_readonly(*owner, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new_readonly(program(SYSTEM_PROGRAM_ID), false),
+            AccountMeta::new_readonly(program(TOKEN_PROGRAM_ID), false),
+        ],
+        data: vec![1],
+    }
+}
+
+/// A Token Program `transferChecked` (instruction `12`) moving `amount` base units from
+/// `source` to `destination`, authorized by `owner` and validated against the mint's
+/// `decimals`. Data is `[12, amount(u64 LE), decimals]`.
+fn token_transfer_checked(
+    source: &Pubkey,
+    mint: &Pubkey,
+    destination: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+    decimals: u8,
+) -> Instruction {
+    let mut data = Vec::with_capacity(10);
+    data.push(12);
+    data.extend_from_slice(&amount.to_le_bytes());
+    data.push(decimals);
+    Instruction {
+        program_id: program(TOKEN_PROGRAM_ID),
+        accounts: vec![
+            AccountMeta::new(*source, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(*destination, false),
+            AccountMeta::new_readonly(*owner, true),
+        ],
+        data,
     }
 }
 
@@ -285,5 +456,43 @@ mod tests {
             message_bytes,
             "message survives the wire round trip byte-for-byte"
         );
+    }
+
+    /// Pins [`associated_token_address`] against a real devnet vector: the associated
+    /// account observed on-chain for this owner and the devnet USDC mint. A wrong
+    /// derivation would send tokens to a non-existent account, so this must not drift.
+    #[test]
+    fn associated_token_address_matches_onchain() {
+        let owner = Pubkey::from_str("Hczgu2xfpJ9FsMzPCPWKgjKPt872r7mrVHNLctPWHAXU").unwrap();
+        let mint = Pubkey::from_str("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU").unwrap();
+        let expected = Pubkey::from_str("4AwPrm7a8cqW8N21Jf66pgjeNgFUoJ7BAXuAw1tSxy76").unwrap();
+        assert_eq!(associated_token_address(&owner, &mint), expected);
+    }
+
+    /// Pins the byte layout of the two token instructions, which the on-chain programs
+    /// parse positionally: a mistake in a discriminant, an amount, or an account order
+    /// would be rejected by the runtime.
+    #[test]
+    fn token_instructions_are_well_formed() {
+        let owner = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+        let source = Pubkey::new_unique();
+        let dest = Pubkey::new_unique();
+
+        let create = create_ata_idempotent(&owner, &owner, &mint, &dest);
+        assert_eq!(create.program_id, program(ASSOCIATED_TOKEN_PROGRAM_ID));
+        assert_eq!(create.data, vec![1], "idempotent create variant");
+        assert_eq!(create.accounts.len(), 6);
+        assert!(create.accounts[0].is_signer && create.accounts[0].is_writable);
+
+        let transfer = token_transfer_checked(&source, &mint, &dest, &owner, 1_500_000, 6);
+        assert_eq!(transfer.program_id, program(TOKEN_PROGRAM_ID));
+        // [12, amount(u64 LE), decimals]
+        let mut expected = vec![12u8];
+        expected.extend_from_slice(&1_500_000u64.to_le_bytes());
+        expected.push(6);
+        assert_eq!(transfer.data, expected);
+        assert_eq!(transfer.accounts.len(), 4);
+        assert!(transfer.accounts[3].is_signer, "owner authorizes the transfer");
     }
 }
