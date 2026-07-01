@@ -107,8 +107,11 @@ class _WalletScreenState extends State<WalletScreen> {
       showDragHandle: true,
       builder: (_) => _SendSheet(wallet: wallet),
     );
-    if (signature != null) {
-      _showSent(signature);
+    if (signature != null && mounted) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _SentDialog(wallet: wallet, signature: signature),
+      );
       _refreshBalance();
     }
   }
@@ -137,39 +140,6 @@ class _WalletScreenState extends State<WalletScreen> {
       _wallet = null;
       _balance = null;
     });
-  }
-
-  void _showSent(String signature) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Sent ✓'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Transaction signature'),
-            const SizedBox(height: 8),
-            SelectableText(
-              'https://explorer.solana.com/tx/$signature?cluster=devnet',
-              style: const TextStyle(fontFamily: 'Menlo', fontSize: 13),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(
-                text: 'https://explorer.solana.com/tx/$signature?cluster=devnet',
-              ));
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Copy link'),
-          ),
-          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done')),
-        ],
-      ),
-    );
   }
 
   void _toast(String message) {
@@ -456,6 +426,104 @@ class _SendSheetState extends State<_SendSheet> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Shows a submitted transaction and tracks its confirmation live by listening to
+/// [XendWallet.watch] — Confirming… → Confirmed → Finalized.
+class _SentDialog extends StatefulWidget {
+  const _SentDialog({required this.wallet, required this.signature});
+
+  final XendWallet wallet;
+  final String signature;
+
+  @override
+  State<_SentDialog> createState() => _SentDialogState();
+}
+
+class _SentDialogState extends State<_SentDialog> {
+  late final Stream<TxStatus> _statuses =
+      widget.wallet.watch(TxHandle(widget.signature));
+
+  String get _explorerUrl =>
+      'https://explorer.solana.com/tx/${widget.signature}?cluster=devnet';
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Sent ✓'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          StreamBuilder<TxStatus>(
+            stream: _statuses,
+            builder: (context, snapshot) => _StatusRow(state: snapshot.data?.state ?? 'pending'),
+          ),
+          const SizedBox(height: 16),
+          const Text('Transaction', style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 4),
+          SelectableText(
+            _explorerUrl,
+            style: const TextStyle(fontFamily: 'Menlo', fontSize: 12),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: _explorerUrl));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(const SnackBar(content: Text('Link copied')));
+            }
+          },
+          child: const Text('Copy link'),
+        ),
+        FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
+      ],
+    );
+  }
+}
+
+/// Renders a transaction's lifecycle state as an icon + label, with a spinner while it is
+/// still confirming.
+class _StatusRow extends StatelessWidget {
+  const _StatusRow({required this.state});
+
+  final String state;
+
+  @override
+  Widget build(BuildContext context) {
+    IconData? icon;
+    Color? color;
+    final String label;
+    if (state == 'confirmed') {
+      icon = Icons.check_circle;
+      color = Colors.green;
+      label = 'Confirmed';
+    } else if (state == 'finalized') {
+      icon = Icons.verified;
+      color = Colors.green;
+      label = 'Finalized';
+    } else if (state == 'failed') {
+      icon = Icons.error;
+      color = Colors.red;
+      label = 'Failed';
+    } else {
+      label = 'Confirming…';
+    }
+    return Row(
+      children: [
+        if (icon == null)
+          const SizedBox(
+              width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+        else
+          Icon(icon, size: 20, color: color),
+        const SizedBox(width: 10),
+        Text(label, style: TextStyle(fontSize: 16, color: color)),
+      ],
     );
   }
 }
