@@ -249,15 +249,47 @@ class XendWallet {
     }
   }
 
-  /// Returns a stream of [TxStatus] updates for the transaction identified by [handle].
+  /// Returns a stream of [TxStatus] updates for the transaction identified by [handle],
+  /// reporting its progress truthfully as it advances from pending to confirmed to
+  /// finalized — a confirmed transaction is never reported as finalized. The stream emits
+  /// once per commitment change and completes when the transaction is finalized or fails,
+  /// or after [timeout] elapses.
   ///
-  /// The stream reports state truthfully as the transaction progresses from pending to
-  /// confirmed to finalized: a confirmed transaction is never reported as finalized.
-  /// Updates are delivered as they occur rather than by polling.
+  /// This release polls the backend every [pollInterval]; a push-based (WebSocket) stream
+  /// is planned. Cancel the subscription to stop watching early — for example, once the
+  /// commitment your app treats as success is reached.
   ///
-  /// Not yet available in this release; currently throws [NotImplementedYet].
-  Stream<TxStatus> watch(TxHandle handle) {
-    throw const NotImplementedYet('XendWallet.watch');
+  /// ```dart
+  /// await for (final status in wallet.watch(tx)) {
+  ///   if (status.commitment == TxCommitment.confirmed) break;
+  /// }
+  /// ```
+  Stream<TxStatus> watch(
+    TxHandle handle, {
+    Duration pollInterval = const Duration(seconds: 2),
+    Duration timeout = const Duration(seconds: 90),
+  }) async* {
+    _requireSolana(chain, 'XendWallet.watch');
+    final deadline = DateTime.now().add(timeout);
+    TxCommitment? lastEmitted;
+    var hasEmitted = false;
+
+    while (true) {
+      final raw = await Xend.backend.getTransactionStatus(handle.id);
+      final status = _statusFromBackend(handle, raw);
+
+      // Emit on the first observation and whenever the commitment advances, so a listener
+      // sees each transition once rather than a status on every poll.
+      if (!hasEmitted || status.commitment != lastEmitted || status.isFailed) {
+        yield status;
+        hasEmitted = true;
+        lastEmitted = status.commitment;
+      }
+
+      if (status.isFailed || status.state == 'finalized') return;
+      if (DateTime.now().isAfter(deadline)) return;
+      await Future<void>.delayed(pollInterval);
+    }
   }
 
   /// Returns up to [limit] past transactions, most recent first. Pass [before] to page
@@ -292,6 +324,42 @@ String _newIdempotencyKey() {
   final random = Random.secure();
   final bytes = List<int>.generate(16, (_) => random.nextInt(256));
   return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+/// Translates a backend commitment string (`processed` | `confirmed` | `finalized` |
+/// `failed`) into a [TxStatus] for the transaction identified by [handle].
+TxStatus _statusFromBackend(TxHandle handle, String raw) {
+  switch (raw) {
+    case 'finalized':
+      return TxStatus(
+        handle: handle,
+        state: 'finalized',
+        commitment: TxCommitment.finalized,
+        signature: handle.id,
+      );
+    case 'confirmed':
+      return TxStatus(
+        handle: handle,
+        state: 'confirmed',
+        commitment: TxCommitment.confirmed,
+        signature: handle.id,
+      );
+    case 'failed':
+      return TxStatus(
+        handle: handle,
+        state: 'failed',
+        signature: handle.id,
+        error: const ChainRejected('transaction failed on-chain'),
+      );
+    case 'processed':
+    default:
+      return TxStatus(
+        handle: handle,
+        state: 'pending',
+        commitment: TxCommitment.processed,
+        signature: handle.id,
+      );
+  }
 }
 
 /// Maps a native secure-element failure into a typed [XendError]. A cancelled biometric

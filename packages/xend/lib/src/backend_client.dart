@@ -79,6 +79,13 @@ class BackendClient {
     return BigInt.parse(body['amount'] as String);
   }
 
+  /// `GET /v1/tx/:signature` — the transaction's current commitment, one of
+  /// `processed`, `confirmed`, `finalized`, or `failed`.
+  Future<String> getTransactionStatus(String signature) async {
+    final body = await _get('/v1/tx/$signature');
+    return body['status'] as String;
+  }
+
   Future<Map<String, dynamic>> _get(String path) async {
     final http.Response resp;
     try {
