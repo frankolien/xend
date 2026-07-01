@@ -8,16 +8,22 @@
 mod chain; // chain adapters (multi-chain abstraction)
 mod db; // connection pool and migrations
 mod error; // error type and HTTP mapping
+mod state; // shared application state
 mod tx; // build, validate, submit, and confirm transactions
 mod wallet; // public-key registration and balances
             // Planned modules: gateway (auth, rate limiting, request IDs),
             // auth (challenge/verify, sessions), notify (WebSocket fan-out).
 
+use std::env;
+use std::sync::Arc;
+
 use axum::{
     routing::{get, post},
     Router,
 };
-use std::env;
+
+use crate::chain::{ChainAdapter, SolanaAdapter};
+use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,13 +33,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://xend:xend@localhost:5432/xend".to_string());
+    let rpc_url = env::var("SOLANA_RPC_URL")
+        .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string());
 
     let pool = db::connect(&db_url).await?;
+    let chain: Arc<dyn ChainAdapter> = Arc::new(SolanaAdapter::new(rpc_url));
+    let state = AppState { pool, chain };
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/wallets", post(wallet::register))
-        .with_state(pool);
+        .route("/v1/tx/build", post(tx::build))
+        .with_state(state);
 
     let addr = "0.0.0.0:8080";
     tracing::info!(%addr, "xend-backend listening");

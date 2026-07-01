@@ -3,10 +3,10 @@
 
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub struct RegisterWalletRequest {
@@ -24,7 +24,7 @@ pub struct RegisterWalletResponse {
 /// already-known key returns its existing wallet id rather than failing, so a client
 /// retry is safe.
 pub async fn register(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Json(req): Json<RegisterWalletRequest>,
 ) -> Result<Json<RegisterWalletResponse>, AppError> {
     validate_solana_pubkey(&req.pubkey)?;
@@ -40,7 +40,7 @@ pub async fn register(
     .bind(id)
     .bind(&req.pubkey)
     .bind(&req.label)
-    .fetch_one(&pool)
+    .fetch_one(&state.pool)
     .await?;
 
     Ok(Json(RegisterWalletResponse {

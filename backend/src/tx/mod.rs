@@ -7,20 +7,60 @@
 //! the original result instead of broadcasting again. Combined with the deterministic
 //! signature of a signed transaction, a blind retry can never produce a double-send.
 
-use crate::chain::ChainAdapter;
+use axum::{extract::State, Json};
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+
+use crate::chain::{ChainAdapter, TransferIntent};
 use crate::error::AppError;
+use crate::state::AppState;
+
+#[derive(Deserialize)]
+pub struct BuildRequest {
+    pub from: String,
+    pub to: String,
+    /// Amount in base units (lamports for SOL), as a string to preserve full precision.
+    pub amount: String,
+    /// Token mint address, or omitted/null for the chain's native asset.
+    pub mint: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BuildResponse {
+    /// Base64-encoded unsigned transaction message for the device to sign.
+    pub message: String,
+    /// Unix timestamp (seconds) after which the transaction is no longer valid.
+    pub valid_until: u64,
+}
 
 /// `POST /v1/tx/build` — assemble an unsigned transfer for the device to sign.
-/// Delegates to the [`ChainAdapter`], keeping this module chain-agnostic.
-///
-/// Not yet implemented. The steps:
-///   1. Validate the intent (recipient well-formed, amount positive, funds sufficient).
-///   2. Build the unsigned transaction via the adapter.
-///   3. Persist a `building` record (with a null signature) so an interruption is
-///      recoverable.
-///   4. Return the serialized message and its validity deadline.
-pub async fn build(_adapter: &dyn ChainAdapter) -> Result<(), AppError> {
-    Err(AppError::Network("tx::build not implemented".into()))
+/// Delegates to the active [`ChainAdapter`], keeping this handler chain-agnostic.
+pub async fn build(
+    State(state): State<AppState>,
+    Json(req): Json<BuildRequest>,
+) -> Result<Json<BuildResponse>, AppError> {
+    let amount: u128 = req
+        .amount
+        .parse()
+        .map_err(|_| AppError::BadRequest("amount must be a base-unit integer".into()))?;
+
+    let intent = TransferIntent {
+        from: req.from,
+        to: req.to,
+        amount,
+        mint: req.mint,
+    };
+
+    let unsigned = state.chain.build_transfer(&intent).await?;
+
+    let message = base64::engine::general_purpose::STANDARD.encode(&unsigned.message);
+    let valid_until = unsigned
+        .valid_until
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    Ok(Json(BuildResponse { message, valid_until }))
 }
 
 /// `POST /v1/tx/submit` — broadcast a signed transaction exactly once.
@@ -38,7 +78,7 @@ pub async fn build(_adapter: &dyn ChainAdapter) -> Result<(), AppError> {
 ///   subscribe_for_confirmation(signature)
 ///   return { signature }
 /// ```
-pub async fn submit(_adapter: &dyn ChainAdapter) -> Result<(), AppError> {
+pub async fn submit(_chain: &dyn ChainAdapter) -> Result<(), AppError> {
     Err(AppError::Network("tx::submit not implemented".into()))
 }
 
@@ -49,6 +89,6 @@ pub async fn submit(_adapter: &dyn ChainAdapter) -> Result<(), AppError> {
 /// success, so a client should query status rather than assume failure.
 ///
 /// Not yet implemented.
-pub async fn status(_adapter: &dyn ChainAdapter) -> Result<(), AppError> {
+pub async fn status(_chain: &dyn ChainAdapter) -> Result<(), AppError> {
     Err(AppError::Network("tx::status not implemented".into()))
 }
