@@ -1,5 +1,6 @@
-//! Database access: the pool and the migrations. In the MVP one Postgres serves all
-//! modules; the module seams (auth/wallet/tx/notify) are where reads/writes split later.
+//! Database access: the connection pool and migrations. Initially a single Postgres
+//! instance serves all modules; the module boundaries indicate where storage would
+//! later be split.
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;

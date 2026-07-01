@@ -1,5 +1,5 @@
-//! Wallet service: registers a wallet's PUBLIC key and (Phase 2) reports balances.
-//! It only ever knows public keys — it generates and stores no private key.
+//! Wallet service: registers a wallet's public key and reports balances. It only ever
+//! handles public keys and never generates or stores a private key.
 
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
@@ -20,10 +20,9 @@ pub struct RegisterWalletResponse {
     pub pubkey: String,
 }
 
-/// `POST /v1/wallets` — register a base58 pubkey. Idempotent: registering an
-/// already-known pubkey returns its existing wallet id rather than erroring, so a
-/// client retry is safe (the same discipline the tx path will formalize with
-/// idempotency keys in Phase 4).
+/// `POST /v1/wallets` — register a base58 public key. Idempotent: registering an
+/// already-known key returns its existing wallet id rather than failing, so a client
+/// retry is safe.
 pub async fn register(
     State(pool): State<PgPool>,
     Json(req): Json<RegisterWalletRequest>,
@@ -50,8 +49,8 @@ pub async fn register(
     }))
 }
 
-/// A Solana address is a base58-encoded 32-byte Ed25519 public key. Reject anything
-/// that isn't — storing a malformed address is a latent money bug.
+/// Validates that `pubkey` is a base58-encoded 32-byte Ed25519 public key. Rejecting a
+/// malformed address here prevents storing one that could later misdirect funds.
 fn validate_solana_pubkey(pubkey: &str) -> Result<(), AppError> {
     let decoded = bs58::decode(pubkey)
         .into_vec()

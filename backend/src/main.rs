@@ -1,18 +1,17 @@
-//! Xend backend — a single binary structured as if it were already five services.
-//! The module boundaries below are drawn exactly where the service boundaries will
-//! later fall, so "extract the tx service" is moving a folder, not untangling yarn.
+//! The Xend backend: a single binary organized as several independent modules whose
+//! boundaries match the service boundaries it would be split into at scale, so that
+//! extracting a service later is a matter of moving a module rather than restructuring.
 //!
-//! Powers are strictly bounded by the signing boundary: read the chain, build
-//! unsigned tx, relay signed tx, remember what happened. It CANNOT sign.
+//! Its capabilities are bounded by the signing boundary: it reads the chain, builds
+//! unsigned transactions, relays signed ones, and records what happened. It never signs.
 
-mod chain; // ChainAdapter trait + SolanaAdapter  (the multi-chain seam)
-mod db; // pool + migrations
-mod error; // AppError → HTTP status mapping
-mod tx; // build · validate · submit · confirm · idempotency  (the heart)
-mod wallet; // register pubkey, balances
-            // mod gateway;  // middleware: auth, rate-limit, request-id  (Phase 1/6)
-            // mod auth;     // challenge/verify, session tokens           (Phase 1)
-            // mod notify;   // ws hub, event fan-out                      (Phase 5)
+mod chain; // chain adapters (multi-chain abstraction)
+mod db; // connection pool and migrations
+mod error; // error type and HTTP mapping
+mod tx; // build, validate, submit, and confirm transactions
+mod wallet; // public-key registration and balances
+            // Planned modules: gateway (auth, rate limiting, request IDs),
+            // auth (challenge/verify, sessions), notify (WebSocket fan-out).
 
 use axum::{
     routing::{get, post},
@@ -22,8 +21,8 @@ use std::env;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Structured JSON logging with request IDs is a Phase 6 hardening item; the
-    // subscriber is initialized here from day one so traces exist while we build.
+    // Structured JSON logging is initialized up front so request traces are available
+    // throughout. Request-ID propagation and richer telemetry are added later.
     tracing_subscriber::fmt().json().init();
 
     let db_url = env::var("DATABASE_URL")
@@ -44,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Liveness. The first thing Phase 1 proves: the binary is up and routes.
+/// Liveness probe.
 async fn health() -> &'static str {
     "ok"
 }

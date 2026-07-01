@@ -1,10 +1,10 @@
-//! One error enum → one HTTP status mapping. Every failure the chain, the DB, or a
-//! client can throw becomes a typed variant here, so no handler invents its own
-//! ad-hoc error shape. The `code` strings are a contract: they line up 1:1 with the
-//! SDK's sealed `XendError` variants on the Dart side, so the client can `switch`.
+//! A single error type mapped to HTTP responses. Every failure from the chain, the
+//! database, or a client becomes a variant of [`AppError`], each mapped to an HTTP
+//! status and a stable `code` string that the SDK's typed errors mirror, so clients can
+//! branch on the failure rather than parse strings.
 //!
-//! Security rule (docs/04-SECURITY.md): internal/DB error detail is logged
-//! server-side and NEVER leaked in a response body.
+//! Internal and database error detail is logged server-side and never included in a
+//! response body.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

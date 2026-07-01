@@ -1,21 +1,21 @@
-//! The multi-chain seam (docs/02-DECISIONS.md#d0). v0.1 ships exactly one impl,
-//! `SolanaAdapter`. Adding Base or Bitcoin later means implementing this one trait —
-//! not rewriting the SDK or the tx service. The `tx/` module speaks only to this trait,
-//! never to a chain-specific client directly.
+//! The chain abstraction. Every supported blockchain implements [`ChainAdapter`]; the
+//! transaction module depends only on this trait, never on a chain-specific client.
+//! Adding a new chain is a matter of providing another implementation. This release
+//! ships a single implementation, [`SolanaAdapter`].
 
 use crate::error::AppError;
 
-/// An unsigned transaction, ready to cross the signing boundary to the device.
+/// An unsigned transaction, ready to be sent to the device for signing.
 pub struct UnsignedTx {
-    /// Opaque serialized message the device signs (base64 at the API edge).
+    /// The serialized transaction message to sign (base64-encoded at the API edge).
     pub message: Vec<u8>,
-    /// When the validity window closes (blockhash expiry, nonce, etc.). The tx
-    /// service races this clock; past it, rebuild rather than broadcast.
+    /// The instant after which the transaction is no longer valid (for example, when its
+    /// blockhash expires). Past this point it must be rebuilt rather than broadcast.
     pub valid_until: std::time::SystemTime,
 }
 
-/// Where a transaction is in its journey. "Done" is a choice among these (D6); the
-/// adapter reports the truth, the SDK decides what to render as success.
+/// A transaction's degree of finality on the network. The adapter reports the actual
+/// level reached; the client decides which level to treat as success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Commitment {
     Processed,
@@ -24,42 +24,47 @@ pub enum Commitment {
     Failed,
 }
 
-/// A transfer request, chain-agnostic. `mint: None` ⇒ the chain's native asset.
+/// A chain-agnostic transfer request. A `mint` of `None` denotes the chain's native
+/// asset; `amount` is in the asset's smallest indivisible unit.
 pub struct TransferIntent {
     pub from: String,
     pub to: String,
-    pub amount: u128, // base units — integer money, always (docs §6 gotcha)
+    pub amount: u128,
     pub mint: Option<String>,
 }
 
-/// Every chain plugs in here. Async in the real impl; shown sync-shaped for the
-/// contract. `build` needs network (fresh blockhash, token accounts); `broadcast`
-/// relays already-signed bytes; `status` maps a signature to a [`Commitment`].
+/// The interface every supported chain implements.
+///
+/// `build_transfer` assembles an unsigned transfer, fetching data the device should not
+/// compute (such as a recent blockhash and fee parameters). `validate_signed` checks a
+/// signed payload before broadcast. `broadcast` submits already-signed bytes and returns
+/// the network signature. `status` reports the current commitment for a signature.
+///
+/// Re-broadcasting identical signed bytes is safe: the network treats them as the same
+/// transaction, which is what makes retrying a stalled transaction correct.
 pub trait ChainAdapter: Send + Sync {
-    /// Human name for logs/metrics.
+    /// The chain's name, used in logs and metrics.
     fn chain(&self) -> &'static str;
 
-    /// Assemble an unsigned transfer. Fetches whatever the device shouldn't compute
-    /// alone (blockhash, fee/priority, token accounts).
+    /// Assembles an unsigned transfer for the given intent.
     fn build_transfer(&self, intent: &TransferIntent) -> Result<UnsignedTx, AppError>;
 
-    /// Validate a signed blob before broadcast (well-formed, signature present,
-    /// matches the intent we built). Cheap defense against a malformed submit.
+    /// Validates a signed payload before broadcast: well-formed, signature present, and
+    /// consistent with the intent it was built from.
     fn validate_signed(&self, signed: &[u8]) -> Result<(), AppError>;
 
-    /// Broadcast already-signed bytes. Returns the network signature/tx id.
-    /// Re-broadcasting identical bytes is safe (the network dedupes) — this is what
-    /// makes "rebroadcast the same bytes" the correct stuck-tx move.
+    /// Broadcasts already-signed bytes and returns the network transaction signature.
     fn broadcast(&self, signed: &[u8]) -> Result<String, AppError>;
 
-    /// Current commitment for a signature.
+    /// Returns the current commitment level for a transaction signature.
     fn status(&self, signature: &str) -> Result<Commitment, AppError>;
 }
 
-/// v0.1's only adapter. Wired to a pinned, credential-holding Solana RPC/WSS client
-/// in Phase 2. All methods currently return the contract's not-yet-implemented shape.
+/// The Solana implementation of [`ChainAdapter`]. It owns the RPC/WebSocket client and
+/// is the only component with RPC credentials. The operations below are not yet
+/// implemented.
 pub struct SolanaAdapter {
-    // rpc: SolanaRpcClient,   // Phase 2 — holds RPC creds; device never sees them.
+    // rpc: SolanaRpcClient,
 }
 
 impl SolanaAdapter {
@@ -80,18 +85,18 @@ impl ChainAdapter for SolanaAdapter {
     }
 
     fn build_transfer(&self, _intent: &TransferIntent) -> Result<UnsignedTx, AppError> {
-        Err(AppError::Network("SolanaAdapter::build_transfer not implemented".into())) // Phase 2
+        Err(AppError::Network("SolanaAdapter::build_transfer not implemented".into()))
     }
 
     fn validate_signed(&self, _signed: &[u8]) -> Result<(), AppError> {
-        Err(AppError::Network("SolanaAdapter::validate_signed not implemented".into())) // Phase 2
+        Err(AppError::Network("SolanaAdapter::validate_signed not implemented".into()))
     }
 
     fn broadcast(&self, _signed: &[u8]) -> Result<String, AppError> {
-        Err(AppError::Network("SolanaAdapter::broadcast not implemented".into())) // Phase 2
+        Err(AppError::Network("SolanaAdapter::broadcast not implemented".into()))
     }
 
     fn status(&self, _signature: &str) -> Result<Commitment, AppError> {
-        Err(AppError::Network("SolanaAdapter::status not implemented".into())) // Phase 2
+        Err(AppError::Network("SolanaAdapter::status not implemented".into()))
     }
 }
