@@ -4066,6 +4066,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "bincode",
  "bs58",
  "reqwest",
  "serde",
