@@ -81,8 +81,8 @@ public class XendSecurePlugin: NSObject, FlutterPlugin {
             return FlutterError(code: "bad_public_key", message: "Stored public key is corrupt", details: nil)
         case .keychain(let status):
             return FlutterError(code: "keychain_error", message: "Keychain error \(status)", details: nil)
-        case .notImplemented(let what):
-            return FlutterError(code: "not_implemented", message: what, details: nil)
+        case .enclave(let message):
+            return FlutterError(code: "enclave_error", message: message, details: nil)
         }
     }
 }
