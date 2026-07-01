@@ -47,8 +47,10 @@ class WalletScreen extends StatefulWidget {
 class _WalletScreenState extends State<WalletScreen> {
   XendWallet? _wallet;
   Balance? _balance;
+  List<TxRecord>? _history;
   bool _busy = false; // create / delete in flight
   bool _loadingBalance = false;
+  bool _loadingHistory = false;
 
   @override
   void initState() {
@@ -60,7 +62,7 @@ class _WalletScreenState extends State<WalletScreen> {
     final wallet = await XendWallet.load();
     if (!mounted) return;
     setState(() => _wallet = wallet);
-    if (wallet != null) _refreshBalance();
+    if (wallet != null) _refresh();
   }
 
   Future<void> _create() async {
@@ -69,7 +71,7 @@ class _WalletScreenState extends State<WalletScreen> {
       final wallet = await XendWallet.create(label: 'Main');
       if (!mounted) return;
       setState(() => _wallet = wallet);
-      _refreshBalance();
+      _refresh();
     } on XendError catch (e) {
       _toast(e.message); // e.g. NetworkError when the backend isn't running
     } finally {
@@ -90,6 +92,23 @@ class _WalletScreenState extends State<WalletScreen> {
       if (mounted) setState(() => _loadingBalance = false);
     }
   }
+
+  Future<void> _refreshHistory() async {
+    final wallet = _wallet;
+    if (wallet == null) return;
+    setState(() => _loadingHistory = true);
+    try {
+      final history = await wallet.history(limit: 20);
+      if (mounted) setState(() => _history = history);
+    } on XendError catch (e) {
+      _toast(e.message);
+    } finally {
+      if (mounted) setState(() => _loadingHistory = false);
+    }
+  }
+
+  /// Refreshes balance and history together (after create, load, and each send).
+  Future<void> _refresh() => Future.wait([_refreshBalance(), _refreshHistory()]);
 
   Future<void> _copyAddress() async {
     final wallet = _wallet;
@@ -112,7 +131,7 @@ class _WalletScreenState extends State<WalletScreen> {
         context: context,
         builder: (_) => _SentDialog(wallet: wallet, signature: signature),
       );
-      _refreshBalance();
+      _refresh();
     }
   }
 
@@ -179,11 +198,24 @@ class _WalletScreenState extends State<WalletScreen> {
         _BalanceCard(
           balance: _balance,
           loading: _loadingBalance,
-          onRefresh: _refreshBalance,
+          onRefresh: _refresh,
         ),
         const SizedBox(height: 16),
         _AddressCard(address: wallet.address, onCopy: _copyAddress),
-        const Spacer(),
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            const Text('Recent activity',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            const Spacer(),
+            if (_loadingHistory)
+              const SizedBox(
+                  width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Expanded(child: _HistoryList(records: _history)),
+        const SizedBox(height: 8),
         FilledButton.icon(
           onPressed: _openSend,
           icon: const Icon(Icons.arrow_upward),
@@ -528,6 +560,56 @@ class _StatusRow extends StatelessWidget {
   }
 }
 
+/// The wallet's recent transactions, or a placeholder while loading / when empty.
+class _HistoryList extends StatelessWidget {
+  const _HistoryList({required this.records});
+
+  final List<TxRecord>? records;
+
+  @override
+  Widget build(BuildContext context) {
+    final records = this.records;
+    if (records == null) {
+      return const Center(child: Text('—', style: TextStyle(color: Colors.grey)));
+    }
+    if (records.isEmpty) {
+      return const Center(
+        child: Text('No transactions yet', style: TextStyle(color: Colors.grey)),
+      );
+    }
+    return ListView.separated(
+      itemCount: records.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (_, i) => _HistoryRow(record: records[i]),
+    );
+  }
+}
+
+/// A single transaction row: amount sent, recipient, status, and how long ago.
+class _HistoryRow extends StatelessWidget {
+  const _HistoryRow({required this.record});
+
+  final TxRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = _formatUnits(record.amount, record.asset.decimals);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const CircleAvatar(radius: 18, child: Icon(Icons.arrow_upward, size: 18)),
+      title: Text('Sent $amount SOL'),
+      subtitle: Text(
+        'To ${_short(record.to)}  ·  ${record.status}',
+        style: const TextStyle(fontSize: 12),
+      ),
+      trailing: Text(
+        _shortAge(record.createdAt),
+        style: const TextStyle(fontSize: 12, color: Colors.grey),
+      ),
+    );
+  }
+}
+
 /// A rounded surface used for the balance and address cards.
 class _Card extends StatelessWidget {
   const _Card({required this.child});
@@ -548,6 +630,15 @@ class _Card extends StatelessWidget {
       child: child,
     );
   }
+}
+
+/// A compact age label for a timestamp, such as `now`, `5m`, `3h`, or `2d`.
+String _shortAge(DateTime time) {
+  final d = DateTime.now().difference(time);
+  if (d.inMinutes < 1) return 'now';
+  if (d.inMinutes < 60) return '${d.inMinutes}m';
+  if (d.inHours < 24) return '${d.inHours}h';
+  return '${d.inDays}d';
 }
 
 /// Shortens an address to `head…tail` for compact display.
