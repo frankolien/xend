@@ -1,7 +1,8 @@
 import 'package:flutter/services.dart'; // re-exports Uint8List
 
-/// The single Dart↔native bridge — `MethodChannel("ai.xend/secure")`. It passes ids and
-/// bytes, NEVER key material (docs §3 gotcha). Internal to the SDK; the UI never sees it.
+/// The private bridge between Dart and the native signer, over the `ai.xend/secure`
+/// method channel. It passes wallet identifiers and byte payloads only, never key
+/// material. Internal to the SDK.
 class SecureChannel {
   const SecureChannel();
 

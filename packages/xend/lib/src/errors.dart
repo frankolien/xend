@@ -1,61 +1,91 @@
-/// A sealed set of failures — exhaustive by design. A developer must be able to
-/// `switch` on the failure and respond correctly: on a wallet, the right response
-/// to "network down" (retry) is the opposite of "insufficient funds" (stop and
-/// tell the user). No stringly-typed errors, no generic exceptions.
+/// The base type for every recoverable failure surfaced by the Xend SDK.
+///
+/// All fallible operations fail with a subtype of [XendError], so callers can handle
+/// each condition explicitly rather than inspecting error strings:
+///
+/// ```dart
+/// try {
+///   await wallet.send(to: recipient, amount: amount);
+/// } on InsufficientFunds {
+///   // Balance too low — inform the user.
+/// } on NetworkError {
+///   // Transient — safe to retry.
+/// } on XendError catch (e) {
+///   // Fallback for any other failure.
+/// }
+/// ```
 sealed class XendError implements Exception {
   const XendError(this.message);
+
+  /// A human-readable description of the failure. Intended for logs and developers, not
+  /// for direct display to end users without localization.
   final String message;
 
   @override
   String toString() => '$runtimeType: $message';
 }
 
-/// Transient. Safe to retry (idempotency makes a blind retry safe). The SDK may
-/// auto-retry with backoff, then surface — see docs/02-DECISIONS.md#d7.
+/// A transient failure while communicating with the Xend backend or network.
+///
+/// Safe to retry. Operations are idempotent, so a retried request is not applied twice.
 final class NetworkError extends XendError {
   const NetworkError([super.message = 'Network unavailable']);
 }
 
-/// Terminal. Do not retry; inform the user. Never broadcast.
+/// The wallet's balance cannot cover the requested amount plus fees.
+///
+/// Terminal: do not retry.
 final class InsufficientFunds extends XendError {
   const InsufficientFunds([super.message = 'Insufficient funds']);
 }
 
-/// Face ID dismissed or interrupted (e.g. app backgrounded mid-prompt). Clean and
-/// recoverable: nothing was signed, nothing sent, no money moved. Offer retry.
+/// Biometric authentication was cancelled or interrupted before signing completed.
+///
+/// No transaction was signed or submitted and no funds moved. The operation may be
+/// retried.
 final class UserCancelledAuth extends XendError {
   const UserCancelledAuth([super.message = 'Authentication cancelled']);
 }
 
-/// The blockhash expired before broadcast. The SDK may auto-handle by rebuilding
-/// and re-prompting Face ID (bounded; never silent) — see docs/02-DECISIONS.md#d7.
+/// The transaction's validity window elapsed before it could be broadcast.
+///
+/// Depending on the SDK's recovery policy, this may be handled automatically by
+/// rebuilding and re-signing the transaction.
 final class BlockhashExpired extends XendError {
-  const BlockhashExpired([super.message = 'Blockhash expired; rebuild required']);
+  const BlockhashExpired([super.message = 'Transaction expired before broadcast']);
 }
 
-/// Terminal. The recipient address is malformed or invalid for the chain.
+/// The recipient address is not valid for the target chain.
+///
+/// Terminal.
 final class InvalidRecipient extends XendError {
   const InvalidRecipient([super.message = 'Invalid recipient address']);
 }
 
-/// Backend/RPC rate limit. Back off for [retryAfter], then retry.
+/// The request was rejected because a rate limit was exceeded.
 final class RateLimited extends XendError {
   const RateLimited(this.retryAfter, [String? message])
       : super(message ?? 'Rate limited');
+
+  /// The minimum duration to wait before retrying.
   final Duration retryAfter;
 }
 
-/// The network refused the transaction. Inspect [reason] (e.g. simulation failure,
-/// program error). Usually terminal for these exact bytes.
+/// The network rejected the transaction.
+///
+/// Usually terminal for the submitted transaction. See [reason] for details.
 final class ChainRejected extends XendError {
   const ChainRejected(this.reason) : super('Chain rejected: $reason');
+
+  /// The reason reported by the network, such as a simulation or program error.
   final String reason;
 }
 
-/// A capability whose *signature* is stable but whose *implementation* is roadmap
-/// (e.g. swap/bridge/on-ramp, or a non-Solana chain in v0.1). Thrown honestly so a
-/// developer never mistakes "not built yet" for "failed at runtime".
+/// The requested capability is not available in this release.
+///
+/// The method's signature is stable, but its implementation is planned for a future
+/// version. Consult the package changelog for availability.
 final class NotImplementedYet extends XendError {
   const NotImplementedYet(String what)
-      : super('$what is not implemented in this version. See docs/03-ROADMAP.md');
+      : super('$what is not available in this version');
 }

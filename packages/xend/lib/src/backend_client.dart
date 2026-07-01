@@ -4,9 +4,8 @@ import 'package:http/http.dart' as http;
 
 import 'errors.dart';
 
-/// Talks HTTP(S) to the Xend backend. Maps backend error `code`s — which line up 1:1
-/// with the Rust `AppError` variants — to typed [XendError]s, so callers can `switch`
-/// on failures instead of parsing strings.
+/// HTTP client for the Xend backend. Translates backend error codes into typed
+/// [XendError]s so callers can branch on the failure rather than parse strings.
 class BackendClient {
   BackendClient({required this.baseUrl, http.Client? client})
       : _client = client ?? http.Client();
@@ -14,7 +13,7 @@ class BackendClient {
   final String baseUrl;
   final http.Client _client;
 
-  /// `POST /v1/wallets` — register a pubkey; returns the backend wallet id.
+  /// `POST /v1/wallets` — register a public key; returns the backend wallet id.
   Future<String> registerWallet(String pubkey, {String? label}) async {
     final body = await _post('/v1/wallets', {
       'pubkey': pubkey,

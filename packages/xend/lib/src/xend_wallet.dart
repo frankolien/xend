@@ -5,36 +5,57 @@ import 'errors.dart';
 import 'models.dart';
 import 'secure_channel.dart';
 
-/// The public face of Xend. Signatures are the contract; bodies fill in across
-/// Phases 1–5 (see docs/00-PRD.md). This is the *entire* public vocabulary.
+/// A non-custodial wallet: an on-device key pair together with the operations to
+/// observe and move the value it controls.
 ///
-/// Design rules encoded here:
-///  * Money is always [BigInt] base units — never a double.
-///  * The API is chain-agnostic (D0): every call takes a [Chain], defaulting to
-///    Solana. v0.1 implements Solana; other chains throw [NotImplementedYet].
-///  * [send] returns fast with a [TxHandle]; callers [watch] for the rest. It does
-///    NOT block until final confirmation — that would conflate "submitted" with "done".
-///  * Every failure is a typed [XendError] variant.
+/// The private key is generated on the device's secure hardware and never leaves it.
+/// Signing happens on-device behind biometric authentication; the Xend service only
+/// ever handles public keys, unsigned transaction requests, and already-signed
+/// transactions, and can never move funds on its own.
+///
+/// Obtain a wallet with [create] (a new key pair), [restore] (from a recovery phrase),
+/// or [load] (an existing on-device wallet). Call [Xend.configure] once before any of
+/// these.
+///
+/// Monetary amounts are always expressed in an asset's smallest indivisible unit as a
+/// [BigInt]; formatting to a human-readable decimal is the caller's responsibility.
+/// Operations accept a [Chain] and default to [Chain.solana]; other chains are not yet
+/// supported and throw [NotImplementedYet].
+///
+/// ```dart
+/// final wallet = await XendWallet.create(label: 'Main');
+/// print(wallet.address);
+/// ```
 class XendWallet {
   XendWallet._(this._walletId, this.address, this.chain);
 
-  /// v0.1 is single-wallet: the key is stored under a fixed native id so it survives an
-  /// app restart. Multi-wallet (generated ids + a local index) is a later enhancement.
+  /// Opaque handle used to reference this wallet's key within the device's secure
+  /// store. It is never the key material itself.
+  ///
+  /// This release manages a single wallet, stored under a fixed identifier so it can be
+  /// reloaded after the app restarts. Support for multiple concurrent wallets is
+  /// planned.
   static const String _defaultWalletId = 'default';
 
-  /// Opaque handle the native vault uses to find this wallet's key. Never the key.
   final String _walletId;
 
-  /// base58 (Solana) / hex (EVM) public address.
+  /// The wallet's public address (base58-encoded on Solana).
   final String address;
 
-  /// The chain this wallet operates on. v0.1: always [Chain.solana].
+  /// The blockchain this wallet operates on. Always [Chain.solana] in this release.
   final Chain chain;
 
-  // ── Lifecycle ────────────────────────────────────────────────────────────
-
-  /// Creates a new keypair *on the device* (native vault), then registers the public
-  /// address with the backend. Only the public address ever leaves native.
+  /// Creates a new wallet with a freshly generated key pair.
+  ///
+  /// The key pair is generated inside the device's secure hardware; only the public
+  /// [address] is returned. The public key is registered with the configured Xend
+  /// backend so that balances and history can be served.
+  ///
+  /// [label] is an optional human-readable name for the wallet. [chain] selects the
+  /// target blockchain and defaults to [Chain.solana].
+  ///
+  /// Throws [NetworkError] if the backend cannot be reached, or [NotImplementedYet] if
+  /// a chain other than Solana is requested.
   static Future<XendWallet> create({
     String? label,
     Chain chain = Chain.solana,
@@ -46,8 +67,10 @@ class XendWallet {
     return XendWallet._(_defaultWalletId, address, chain);
   }
 
-  /// Loads the existing on-device wallet, or null if none has been created yet. This is
-  /// the app-restart read path (P1 checkpoint: the address survives a restart).
+  /// Loads the wallet already stored on this device, or `null` if none exists.
+  ///
+  /// Typically called on startup to restore a previously created wallet. No network
+  /// request is made and the key never leaves the device.
   static Future<XendWallet?> load({Chain chain = Chain.solana}) async {
     _requireSolana(chain, 'XendWallet.load');
     const channel = SecureChannel();
@@ -56,51 +79,74 @@ class XendWallet {
     return XendWallet._(_defaultWalletId, address, chain);
   }
 
-  /// Restores a wallet from a seed phrase. The recovery path for a re-enrolled
-  /// biometric (D3). Needs BIP39 → Ed25519 derivation in the native vault — Phase 2.
+  /// Restores a wallet from its recovery phrase.
+  ///
+  /// Not yet available in this release; currently throws [NotImplementedYet].
   static Future<XendWallet> restore(
     String mnemonic, {
     Chain chain = Chain.solana,
   }) {
     _requireSolana(chain, 'XendWallet.restore');
-    throw const NotImplementedYet('XendWallet.restore'); // Phase 2
+    throw const NotImplementedYet('XendWallet.restore');
   }
 
-  /// Wipes this wallet's key material from the native vault.
+  /// Permanently removes this wallet's key material from the device's secure store.
+  ///
+  /// This is irreversible: without the recovery phrase, the wallet cannot be recovered.
   Future<void> delete() => const SecureChannel().deleteKey(_walletId);
 
-  // ── Identity & balance ───────────────────────────────────────────────────
-
-  /// Balance of [asset] (defaults to the chain's native asset). Served by the backend
-  /// over RPC — the device never hits a node directly.
+  /// Returns the balance of [asset], or the chain's native asset when [asset] is
+  /// omitted. The value is expressed in the asset's smallest indivisible unit.
+  ///
+  /// Not yet available in this release; currently throws [NotImplementedYet].
   Future<Balance> balance({Asset? asset}) {
-    throw const NotImplementedYet('XendWallet.balance'); // Phase 2
+    throw const NotImplementedYet('XendWallet.balance');
   }
 
-  // ── Money movement ─────────────────────────────────────────────────────────
-
-  /// The headline call. Build → Face ID sign on device → backend broadcasts → confirm.
-  /// Returns a [TxHandle] quickly; [watch] it to observe confirmation.
+  /// Sends [amount] of [asset] to the address [to].
   ///
-  /// Throws [InsufficientFunds] / [InvalidRecipient] (terminal), [UserCancelledAuth],
-  /// [BlockhashExpired] (may auto-handle, D7), [NetworkError] / [RateLimited] (retryable).
+  /// The transaction is built by the Xend backend, signed on this device behind
+  /// biometric authentication, and then broadcast. The method returns as soon as the
+  /// transaction is submitted, yielding a [TxHandle]; use [watch] to observe
+  /// confirmation. It intentionally does not wait for final confirmation.
+  ///
+  /// [amount] is expressed in the asset's smallest indivisible unit (for example,
+  /// lamports for SOL). [asset] defaults to the native asset of [chain]. Supply
+  /// [idempotencyKey] to make a retry safe; if omitted, one is generated per call.
+  /// [successAt] selects the commitment level at which the transaction is considered
+  /// successful.
+  ///
+  /// Throws:
+  ///  * [InsufficientFunds] if the balance cannot cover the amount and fees.
+  ///  * [InvalidRecipient] if [to] is not valid for [chain].
+  ///  * [UserCancelledAuth] if biometric authentication is dismissed.
+  ///  * [NetworkError] or [RateLimited] for transient failures that may be retried.
+  ///
+  /// Not yet available in this release; currently throws [NotImplementedYet].
+  ///
+  /// ```dart
+  /// final tx = await wallet.send(to: recipient, amount: BigInt.from(1000000));
+  /// await for (final status in wallet.watch(tx)) {
+  ///   if (status.isTerminalSuccess) break;
+  /// }
+  /// ```
   Future<TxHandle> send({
     required String to,
-    required BigInt amount, // base units, never a double
-    Asset? asset, // defaults to native asset of [chain]
-    String? idempotencyKey, // auto-generated if omitted
-    TxCommitment successAt = TxCommitment.confirmed, // D6
+    required BigInt amount,
+    Asset? asset,
+    String? idempotencyKey,
+    TxCommitment successAt = TxCommitment.confirmed,
   }) {
-    throw const NotImplementedYet('XendWallet.send'); // Phase 2
+    throw const NotImplementedYet('XendWallet.send');
   }
 
-  /// Where to receive. Returns [address]; incoming funds appear via
-  /// reconcile-on-foreground (docs §9), so no socket must be held while closed.
+  /// Returns the address at which this wallet can receive funds.
   String receive() => address;
 
-  // ── Money movement · roadmap verbs (stable signatures, no impl) ────────────
-
-  /// Swap one asset for another. **v2.0** — throws [NotImplementedYet] today.
+  /// Swaps [amount] of [from] into [to], optionally bounding slippage with
+  /// [maxSlippage].
+  ///
+  /// Not yet available in this release; currently throws [NotImplementedYet].
   Future<TxHandle> swap({
     required Asset from,
     required Asset to,
@@ -110,7 +156,9 @@ class XendWallet {
     throw const NotImplementedYet('XendWallet.swap');
   }
 
-  /// Bridge an asset across chains. **v2.0** — throws [NotImplementedYet] today.
+  /// Bridges [amount] of [asset] to [toAddress] on [toChain].
+  ///
+  /// Not yet available in this release; currently throws [NotImplementedYet].
   Future<TxHandle> bridge({
     required Asset asset,
     required BigInt amount,
@@ -120,30 +168,38 @@ class XendWallet {
     throw const NotImplementedYet('XendWallet.bridge');
   }
 
-  /// Sign an arbitrary message (behind Face ID). Native signing is Phase 2.
+  /// Signs an arbitrary [message] on-device behind biometric authentication.
+  ///
+  /// [reason] is shown to the user in the authentication prompt so they can confirm
+  /// what they are approving.
+  ///
+  /// Not yet available in this release; currently throws [NotImplementedYet].
   Future<List<int>> sign(List<int> message, {required String reason}) {
-    throw const NotImplementedYet('XendWallet.sign'); // Phase 2
+    throw const NotImplementedYet('XendWallet.sign');
   }
 
-  // ── Observation ────────────────────────────────────────────────────────────
-
-  /// Live status for a transaction: emits pending → confirmed → finalized (or failed).
-  /// Backed by backend WSS fan-out, not polling. Every event is idempotent and
-  /// state-setting, so reconnects are safe.
+  /// Returns a stream of [TxStatus] updates for the transaction identified by [handle].
+  ///
+  /// The stream reports state truthfully as the transaction progresses from pending to
+  /// confirmed to finalized: a confirmed transaction is never reported as finalized.
+  /// Updates are delivered as they occur rather than by polling.
+  ///
+  /// Not yet available in this release; currently throws [NotImplementedYet].
   Stream<TxStatus> watch(TxHandle handle) {
-    throw const NotImplementedYet('XendWallet.watch'); // Phase 5
+    throw const NotImplementedYet('XendWallet.watch');
   }
 
-  /// Paginated history from the backend index.
+  /// Returns up to [limit] past transactions, most recent first. Pass [before] to page
+  /// through older records.
+  ///
+  /// Not yet available in this release; currently throws [NotImplementedYet].
   Future<List<TxRecord>> history({int limit = 20, String? before}) {
-    throw const NotImplementedYet('XendWallet.history'); // Phase 2/3
+    throw const NotImplementedYet('XendWallet.history');
   }
-
-  // ── internal ───────────────────────────────────────────────────────────────
 
   static void _requireSolana(Chain chain, String call) {
     if (chain != Chain.solana) {
-      throw NotImplementedYet('$call on ${chain.name} (v0.1 is Solana-only)');
+      throw NotImplementedYet('$call on ${chain.name}');
     }
   }
 }

@@ -1,8 +1,8 @@
 /// Xend — embedded, non-custodial payments for mobile apps.
 ///
-/// The entire public vocabulary. If a symbol isn't exported here, it's internal.
-/// A consuming app should import *only* this file and never a crypto or RPC package.
-/// If it needs to know what a blockhash is, the abstraction has leaked.
+/// This library is the complete public surface of the SDK; any symbol not exported here
+/// is internal and may change without notice. Applications import only this file and
+/// need no blockchain or cryptography dependency of their own.
 library xend;
 
 export 'src/config.dart' show Xend, XendConfig;
