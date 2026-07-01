@@ -1,10 +1,9 @@
-//! Transaction handling: building unsigned transactions, validating signed ones,
-//! broadcasting, tracking confirmation, and enforcing idempotency. This module never
-//! signs — it assembles and relays; the device holds the key and signs.
+//! Transaction endpoints: build an unsigned transfer, submit a signed one, and report
+//! status. This layer never signs — it assembles and relays; the device holds the key.
 //!
-//! Idempotency is the core correctness property: a client attaches an `idempotency_key`
-//! to every submission, the database enforces its uniqueness, and a duplicate returns
-//! the original result instead of broadcasting again. Combined with the deterministic
+//! Idempotency is the core correctness property of `submit`: a client attaches an
+//! `idempotency_key`, the ledger enforces its uniqueness, and a duplicate returns the
+//! original result instead of broadcasting again. Combined with the deterministic
 //! signature of a signed transaction, a blind retry can never produce a double-send.
 
 use axum::{
@@ -13,11 +12,11 @@ use axum::{
 };
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::chain::{Commitment, TransferIntent};
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::store;
 
 #[derive(Deserialize)]
 pub struct BuildRequest {
@@ -38,7 +37,7 @@ pub struct BuildResponse {
 }
 
 /// `POST /v1/tx/build` — assemble an unsigned transfer for the device to sign.
-/// Delegates to the active [`ChainAdapter`], keeping this handler chain-agnostic.
+/// Delegates to the active chain adapter, keeping this handler chain-agnostic.
 pub async fn build(
     State(state): State<AppState>,
     Json(req): Json<BuildRequest>,
@@ -93,12 +92,9 @@ pub struct SubmitResponse {
 
 /// `POST /v1/tx/submit` — broadcast a signed transaction exactly once.
 ///
-/// The idempotency key is the correctness pivot. If a submission with the same key has
-/// already produced a signature, that signature is returned and nothing is broadcast —
-/// so a client that retries after a lost response cannot double-send. Concurrent
-/// submissions of the same key race on the table's `UNIQUE` constraint to a single
-/// winning row; a loser proceeds too, which is safe because re-broadcasting identical
-/// signed bytes yields the same on-chain signature.
+/// If a submission with the same key has already produced a signature, that signature is
+/// returned and nothing is broadcast — so a client that retries after a lost response
+/// cannot double-send.
 pub async fn submit(
     State(state): State<AppState>,
     Json(req): Json<SubmitRequest>,
@@ -108,41 +104,27 @@ pub async fn submit(
         .map_err(|_| AppError::BadRequest("signed transaction is not valid base64".into()))?;
 
     // Fast path: this key already produced a signature. Return it without re-broadcasting.
-    let existing: Option<(Option<String>, String)> =
-        sqlx::query_as("select signature, status from transactions where idempotency_key = $1")
-            .bind(&req.idempotency_key)
-            .fetch_optional(&state.pool)
-            .await?;
-
-    if let Some((Some(signature), status)) = existing {
-        return Ok(Json(SubmitResponse { signature, status }));
-    }
-
-    // First time we have seen this key: claim it. The UNIQUE constraint plus
-    // `on conflict do nothing` makes concurrent claims collapse to one row.
-    if existing.is_none() {
-        let wallet_id: Option<Uuid> = match &req.pubkey {
-            Some(pubkey) => {
-                sqlx::query_scalar("select id from wallets where pubkey = $1")
-                    .bind(pubkey)
-                    .fetch_optional(&state.pool)
-                    .await?
-            }
+    // Otherwise claim the key with a pending row so a retry finds it here next time.
+    if let Some(existing) = store::transactions::find_by_idempotency(&state.pool, &req.idempotency_key).await? {
+        if let Some(signature) = existing.signature {
+            return Ok(Json(SubmitResponse {
+                signature,
+                status: existing.status,
+            }));
+        }
+    } else {
+        let wallet_id = match &req.pubkey {
+            Some(pubkey) => store::wallets::find_id_by_pubkey(&state.pool, pubkey).await?,
             None => None,
         };
-
-        sqlx::query(
-            "insert into transactions (id, wallet_id, idempotency_key, status, to_address, amount, mint)
-             values ($1, $2, $3, 'pending', $4, $5, $6)
-             on conflict (idempotency_key) do nothing",
+        store::transactions::insert_pending(
+            &state.pool,
+            wallet_id,
+            &req.idempotency_key,
+            req.to.as_deref(),
+            req.amount.as_deref(),
+            req.mint.as_deref(),
         )
-        .bind(Uuid::new_v4())
-        .bind(wallet_id)
-        .bind(&req.idempotency_key)
-        .bind(&req.to)
-        .bind(&req.amount)
-        .bind(&req.mint)
-        .execute(&state.pool)
         .await?;
     }
 
@@ -150,16 +132,7 @@ pub async fn submit(
     state.chain.validate_signed(&signed).await?;
 
     let signature = state.chain.broadcast(&signed).await?;
-
-    sqlx::query(
-        "update transactions
-         set signature = $1, status = 'submitted', updated_at = now()
-         where idempotency_key = $2",
-    )
-    .bind(&signature)
-    .bind(&req.idempotency_key)
-    .execute(&state.pool)
-    .await?;
+    store::transactions::mark_submitted(&state.pool, &req.idempotency_key, &signature).await?;
 
     Ok(Json(SubmitResponse {
         signature,

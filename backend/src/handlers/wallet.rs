@@ -1,5 +1,5 @@
-//! Wallet service: registers a wallet's public key and reports balances. It only ever
-//! handles public keys and never generates or stores a private key.
+//! Wallet endpoints: register a public key and report balances. Only public keys are
+//! handled here; a private key is never generated or stored.
 
 use axum::{
     extract::{Path, Query, State},
@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::store;
 
 #[derive(Deserialize)]
 pub struct RegisterWalletRequest {
@@ -31,23 +32,9 @@ pub async fn register(
     Json(req): Json<RegisterWalletRequest>,
 ) -> Result<Json<RegisterWalletResponse>, AppError> {
     validate_solana_pubkey(&req.pubkey)?;
-
-    let id = Uuid::new_v4();
-    let row: (Uuid,) = sqlx::query_as(
-        "insert into wallets (id, pubkey, label)
-         values ($1, $2, $3)
-         on conflict (pubkey)
-             do update set label = coalesce(excluded.label, wallets.label)
-         returning id",
-    )
-    .bind(id)
-    .bind(&req.pubkey)
-    .bind(&req.label)
-    .fetch_one(&state.pool)
-    .await?;
-
+    let wallet_id = store::wallets::upsert(&state.pool, &req.pubkey, req.label.as_deref()).await?;
     Ok(Json(RegisterWalletResponse {
-        wallet_id: row.0,
+        wallet_id,
         pubkey: req.pubkey,
     }))
 }
@@ -68,8 +55,8 @@ pub struct BalanceResponse {
 
 /// `GET /v1/wallets/:pubkey/balance` — the wallet's balance in base units.
 ///
-/// Reads through the active [`ChainAdapter`], so it stays chain-agnostic. Only public
-/// data is involved; no authentication is required to read a public balance.
+/// Reads through the active chain adapter, so it stays chain-agnostic. Only public data
+/// is involved; no authentication is required to read a public balance.
 pub async fn balance(
     State(state): State<AppState>,
     Path(pubkey): Path<String>,

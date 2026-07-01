@@ -1,26 +1,21 @@
-//! The Xend backend: a single binary organized as several independent modules whose
-//! boundaries match the service boundaries it would be split into at scale, so that
-//! extracting a service later is a matter of moving a module rather than restructuring.
+//! The Xend backend entry point. It loads configuration, builds shared state, and serves.
+//! Everything else lives in a dedicated module: the route table in [`app`], the HTTP
+//! handlers in [`handlers`], persistence in [`store`], the chain abstraction in [`chain`],
+//! shared state in [`state`], and error mapping in [`error`].
 //!
-//! Its capabilities are bounded by the signing boundary: it reads the chain, builds
+//! The service's capability is bounded by the signing boundary: it reads the chain, builds
 //! unsigned transactions, relays signed ones, and records what happened. It never signs.
 
-mod chain; // chain adapters (multi-chain abstraction)
-mod db; // connection pool and migrations
-mod error; // error type and HTTP mapping
-mod state; // shared application state
-mod tx; // build, validate, submit, and confirm transactions
-mod wallet; // public-key registration and balances
-            // Planned modules: gateway (auth, rate limiting, request IDs),
-            // auth (challenge/verify, sessions), notify (WebSocket fan-out).
+mod app;
+mod chain;
+mod db;
+mod error;
+mod handlers;
+mod state;
+mod store;
 
 use std::env;
 use std::sync::Arc;
-
-use axum::{
-    routing::{get, post},
-    Router,
-};
 
 use crate::chain::{ChainAdapter, SolanaAdapter};
 use crate::state::AppState;
@@ -40,24 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chain: Arc<dyn ChainAdapter> = Arc::new(SolanaAdapter::new(rpc_url));
     let state = AppState { pool, chain };
 
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/v1/wallets", post(wallet::register))
-        .route("/v1/wallets/:pubkey/balance", get(wallet::balance))
-        .route("/v1/tx/build", post(tx::build))
-        .route("/v1/tx/submit", post(tx::submit))
-        .route("/v1/tx/:signature", get(tx::status))
-        .with_state(state);
-
     let addr = "0.0.0.0:8080";
     tracing::info!(%addr, "xend-backend listening");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app::router(state)).await?;
     Ok(())
-}
-
-/// Liveness probe.
-async fn health() -> &'static str {
-    "ok"
 }
