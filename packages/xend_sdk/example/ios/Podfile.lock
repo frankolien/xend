@@ -1,0 +1,22 @@
+PODS:
+  - Flutter (1.0.0)
+  - xend_sdk (0.1.0):
+    - Flutter
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - xend_sdk (from `.symlinks/plugins/xend_sdk/ios`)
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  xend_sdk:
+    :path: ".symlinks/plugins/xend_sdk/ios"
+
+SPEC CHECKSUMS:
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  xend_sdk: c2314c628475402390dfa17a6bd354d960aac094
+
+PODFILE CHECKSUM: ed6af9673485ed3388c4ef07d4158e06c2d3326c
+
+COCOAPODS: 1.16.2
