@@ -161,19 +161,77 @@ final class SecureSigner: SecureSigning {
 
     // MARK: - Secure Enclave key management
 
-    /// Creates the P-256 key that wraps the Ed25519 private key, gated by the current
-    /// enrolled biometrics. On hardware with a Secure Enclave the key is generated inside
-    /// it and cannot be extracted; where no Enclave is available (for example, a
-    /// simulator) it falls back to a software-protected keychain key, which is intended
-    /// for development only. Any existing key for the wallet is removed first.
+    /// Creates the P-256 key that wraps the Ed25519 private key. On a real device this is a
+    /// Secure Enclave key, gated by the current enrolled biometrics, that cannot be
+    /// extracted. To keep development environments unblocked, generation is attempted from
+    /// the strongest viable configuration down to progressively relaxed ones: the
+    /// biometric gate is requested only when a biometric is actually enrolled, and the
+    /// Enclave is used only when it can produce a key. A real device succeeds on the first
+    /// attempt; a fresh simulator (Enclave reported present but no biometric enrolled)
+    /// falls through to a key it can create. Any existing key for the wallet is removed
+    /// first.
     private func createEnclaveKey(walletId: String) throws -> SecKey {
         deleteEnclaveKey(walletId: walletId)
 
+        let enclaveAvailable = SecureEnclave.isAvailable
+        let biometricsEnrolled = LAContext()
+            .canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+
+        // Ordered strongest-first. `.privateKeyUsage` is valid only for an Enclave key;
+        // `.biometryCurrentSet` is requested only when a biometric is enrolled to bind to.
+        var attempts: [(flags: SecAccessControlCreateFlags, inEnclave: Bool)] = []
+        if enclaveAvailable && biometricsEnrolled {
+            attempts.append(([.privateKeyUsage, .biometryCurrentSet], true))
+        }
+
+        #if targetEnvironment(simulator)
+        // Development fallbacks, compiled ONLY into simulator builds and never shipped to a
+        // device: a simulator may report an Enclave that cannot mint keys and usually has
+        // no enrolled biometric, so relax progressively to whatever it can create.
+        if enclaveAvailable {
+            attempts.append(([.privateKeyUsage], true))
+        }
+        if biometricsEnrolled {
+            attempts.append(([.biometryCurrentSet], false))
+        }
+        attempts.append(([], false))
+        #else
+        // Real device: signing must always require user authentication. If no biometric is
+        // enrolled, fall back to the device passcode via `.userPresence` — never to an
+        // unguarded key. A device with neither passcode nor biometrics fails here by
+        // design, rather than creating a signing key anyone could use.
+        if !biometricsEnrolled {
+            attempts.append(([.privateKeyUsage, .userPresence], true))
+        }
+        #endif
+
+        var lastError: Error = SecureSignerError.enclave("wrapping-key generation failed")
+        for attempt in attempts {
+            do {
+                return try makeWrappingKey(
+                    walletId: walletId,
+                    flags: attempt.flags,
+                    inSecureEnclave: attempt.inEnclave
+                )
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    /// Generates one wrapping key with the given access-control `flags`, placing it in the
+    /// Secure Enclave when `inSecureEnclave` is set.
+    private func makeWrappingKey(
+        walletId: String,
+        flags: SecAccessControlCreateFlags,
+        inSecureEnclave: Bool
+    ) throws -> SecKey {
         var accessError: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
             nil,
             kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            [.privateKeyUsage, .biometryCurrentSet],
+            flags,
             &accessError
         ) else {
             throw SecureSignerError.enclave("could not build access control")
@@ -188,13 +246,15 @@ final class SecureSigner: SecureSigning {
                 kSecAttrAccessControl as String: access,
             ],
         ]
-        if SecureEnclave.isAvailable {
+        if inSecureEnclave {
             attributes[kSecAttrTokenID as String] = kSecAttrTokenIDSecureEnclave
         }
 
         var createError: Unmanaged<CFError>?
         guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &createError) else {
-            throw SecureSignerError.enclave("wrapping-key generation failed")
+            let detail = createError
+                .map { CFErrorCopyDescription($0.takeRetainedValue()) as String } ?? "unknown error"
+            throw SecureSignerError.enclave("wrapping-key generation failed: \(detail)")
         }
         return key
     }
