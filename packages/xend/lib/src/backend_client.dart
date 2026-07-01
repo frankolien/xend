@@ -79,6 +79,23 @@ class BackendClient {
     return BigInt.parse(body['amount'] as String);
   }
 
+  /// `GET /v1/wallets/:pubkey/transactions` — the wallet's transaction history, most
+  /// recent first. Each element is the raw record JSON; the caller maps it to a model.
+  Future<List<Map<String, dynamic>>> getHistory(
+    String pubkey, {
+    int limit = 20,
+    String? before,
+  }) async {
+    final params = <String, String>{
+      'limit': '$limit',
+      if (before != null) 'before': before,
+    };
+    final query = Uri(queryParameters: params).query;
+    final body = await _get('/v1/wallets/$pubkey/transactions?$query');
+    final list = body['transactions'] as List<dynamic>;
+    return list.cast<Map<String, dynamic>>();
+  }
+
   /// `GET /v1/tx/:signature` — the transaction's current commitment, one of
   /// `processed`, `confirmed`, `finalized`, or `failed`.
   Future<String> getTransactionStatus(String signature) async {

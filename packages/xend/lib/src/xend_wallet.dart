@@ -108,13 +108,9 @@ class XendWallet {
   /// Returns the balance of [asset], or the chain's native asset when [asset] is
   /// omitted. The value is expressed in the asset's smallest indivisible unit.
   ///
-  /// Only native SOL is supported in this release; passing a token [asset] throws
-  /// [NotImplementedYet].
+  /// Pass a token [asset] (one with a `mint`) to read an SPL token balance, such as USDC.
   Future<Balance> balance({Asset? asset}) async {
     _requireSolana(chain, 'XendWallet.balance');
-    if (asset?.mint != null) {
-      throw const NotImplementedYet('SPL token balances');
-    }
     final amount = await Xend.backend.getBalance(address, mint: asset?.mint);
     return Balance(asset: asset ?? Asset.native(chain), amount: amount);
   }
@@ -132,8 +128,9 @@ class XendWallet {
   /// [successAt] selects the commitment level at which [watch] reports success.
   ///
   /// In this release the returned handle's id is the on-chain transaction signature,
-  /// which can be looked up on a block explorer. Only native SOL transfers are
-  /// supported; passing a token [asset] throws [NotImplementedYet].
+  /// which can be looked up on a block explorer. Pass a token [asset] (one with a `mint`)
+  /// to send an SPL token such as USDC; the recipient's token account is created
+  /// automatically if it does not exist yet.
   ///
   /// Throws:
   ///  * [InsufficientFunds] if the balance cannot cover the amount and fees.
@@ -157,12 +154,10 @@ class XendWallet {
     TxCommitment successAt = TxCommitment.confirmed,
   }) async {
     _requireSolana(chain, 'XendWallet.send');
-    if (asset?.mint != null) {
-      throw const NotImplementedYet('SPL token transfers');
-    }
     if (amount <= BigInt.zero) {
       throw ArgumentError.value(amount, 'amount', 'must be greater than zero');
     }
+    final mint = asset?.mint;
 
     // 1. The backend assembles the unsigned transfer, fetching the recent blockhash the
     //    device must not compute for itself.
@@ -170,6 +165,7 @@ class XendWallet {
       from: address,
       to: to,
       amount: amount,
+      mint: mint,
     );
     final message = base64Decode(built.message);
 
@@ -195,6 +191,7 @@ class XendWallet {
       from: address,
       to: to,
       amount: amount,
+      mint: mint,
     );
 
     return TxHandle(result.signature);
@@ -292,12 +289,13 @@ class XendWallet {
     }
   }
 
-  /// Returns up to [limit] past transactions, most recent first. Pass [before] to page
+  /// Returns up to [limit] past transactions, most recent first. Pass the [before] cursor
+  /// (an RFC3339 timestamp, such as the [TxRecord.createdAt] of the last row seen) to page
   /// through older records.
-  ///
-  /// Not yet available in this release; currently throws [NotImplementedYet].
-  Future<List<TxRecord>> history({int limit = 20, String? before}) {
-    throw const NotImplementedYet('XendWallet.history');
+  Future<List<TxRecord>> history({int limit = 20, String? before}) async {
+    _requireSolana(chain, 'XendWallet.history');
+    final raw = await Xend.backend.getHistory(address, limit: limit, before: before);
+    return raw.map((json) => _txRecordFromJson(json, chain)).toList();
   }
 
   static void _requireSolana(Chain chain, String call) {
@@ -324,6 +322,22 @@ String _newIdempotencyKey() {
   final random = Random.secure();
   final bytes = List<int>.generate(16, (_) => random.nextInt(256));
   return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+/// Builds a [TxRecord] from a backend history record. A `null` mint denotes the chain's
+/// native asset; amounts are decimal strings in base units.
+TxRecord _txRecordFromJson(Map<String, dynamic> json, Chain chain) {
+  final mint = json['mint'] as String?;
+  return TxRecord(
+    signature: json['signature'] as String,
+    status: json['status'] as String,
+    to: (json['to'] as String?) ?? '',
+    amount: BigInt.tryParse((json['amount'] as String?) ?? '0') ?? BigInt.zero,
+    asset: mint == null
+        ? Asset.native(chain)
+        : Asset(chain: chain, mint: mint, decimals: 0),
+    createdAt: DateTime.parse(json['created_at'] as String),
+  );
 }
 
 /// Translates a backend commitment string (`processed` | `confirmed` | `finalized` |
