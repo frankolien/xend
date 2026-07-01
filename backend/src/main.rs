@@ -43,7 +43,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/wallets", post(wallet::register))
+        .route("/v1/wallets/:pubkey/balance", get(wallet::balance))
         .route("/v1/tx/build", post(tx::build))
+        .route("/v1/tx/submit", post(tx::submit))
+        .route("/v1/tx/:signature", get(tx::status))
         .with_state(state);
 
     let addr = "0.0.0.0:8080";
