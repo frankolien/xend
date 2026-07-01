@@ -1,0 +1,27 @@
+# Local dev dependencies for the Xend backend. `docker compose up -d` then
+# `cd backend && cargo run`. Postgres holds public facts; Redis is for sessions
+# and rate-limit counters (used from Phase 1 gateway / Phase 4 idempotency onward).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: xend
+      POSTGRES_PASSWORD: xend
+      POSTGRES_DB: xend
+    ports:
+      - "5432:5432"
+    volumes:
+      - xend_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xend"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+volumes:
+  xend_pg:
