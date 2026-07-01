@@ -1,11 +1,7 @@
 import Foundation
 
-/// Base58 (Bitcoin/Solana alphabet). A Solana address is the base58 encoding of a
-/// 32-byte Ed25519 public key. Verified against known vectors + 1000 random 32-byte
-/// roundtrips before landing here (see scratchpad/verify_crypto.swift).
-///
-/// Boring where it counts (philosophy #5): this is money-adjacent encoding, so it is
-/// a plain, tested, allocation-simple implementation — no cleverness.
+/// Base58 encoding and decoding using the Bitcoin/Solana alphabet. A Solana address is
+/// the base58 encoding of a 32-byte Ed25519 public key.
 enum Base58 {
     private static let alphabet =
         Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".utf8)
