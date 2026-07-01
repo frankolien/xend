@@ -2,6 +2,7 @@
 //! the mechanism behind idempotent submission: `idempotency_key` is UNIQUE, so a repeated
 //! submission finds the original row instead of broadcasting again.
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -54,6 +55,62 @@ pub async fn insert_pending(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// A broadcast transaction as recorded in the ledger, for history.
+pub struct Record {
+    pub signature: String,
+    pub status: String,
+    pub to_address: Option<String>,
+    pub amount: Option<String>,
+    pub mint: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Lists a wallet's broadcast transactions, most recent first, up to `limit`. When
+/// `before` is supplied, only transactions created strictly before it are returned, for
+/// cursor pagination. Rows not yet broadcast (no signature) are omitted.
+pub async fn list_for_wallet(
+    pool: &PgPool,
+    wallet_id: Uuid,
+    limit: i64,
+    before: Option<DateTime<Utc>>,
+) -> Result<Vec<Record>, AppError> {
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        "select signature, status, to_address, amount, mint, created_at
+         from transactions
+         where wallet_id = $1
+           and signature is not null
+           and ($2::timestamptz is null or created_at < $2)
+         order by created_at desc
+         limit $3",
+    )
+    .bind(wallet_id)
+    .bind(before)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(signature, status, to_address, amount, mint, created_at)| Record {
+                signature,
+                status,
+                to_address,
+                amount,
+                mint,
+                created_at,
+            },
+        )
+        .collect())
 }
 
 /// Records the on-chain signature for a claimed key and marks it broadcast.

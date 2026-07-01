@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -68,6 +69,69 @@ pub async fn balance(
         amount: amount.to_string(),
         mint: query.mint,
     }))
+}
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    /// Maximum number of records to return (clamped to 1..=100; defaults to 20).
+    pub limit: Option<i64>,
+    /// RFC3339 cursor: return only transactions created strictly before this instant.
+    pub before: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct TransactionRecord {
+    pub signature: String,
+    pub status: String,
+    pub to: Option<String>,
+    pub amount: Option<String>,
+    pub mint: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+pub struct HistoryResponse {
+    pub transactions: Vec<TransactionRecord>,
+}
+
+/// `GET /v1/wallets/:pubkey/transactions` — the wallet's transaction history, most recent
+/// first. An unregistered wallet simply has no history and returns an empty list.
+pub async fn history(
+    State(state): State<AppState>,
+    Path(pubkey): Path<String>,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<HistoryResponse>, AppError> {
+    validate_solana_pubkey(&pubkey)?;
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+
+    let before = match query.before {
+        Some(cursor) => Some(
+            DateTime::parse_from_rfc3339(&cursor)
+                .map_err(|_| AppError::BadRequest("before must be an RFC3339 timestamp".into()))?
+                .with_timezone(&Utc),
+        ),
+        None => None,
+    };
+
+    let wallet_id = match store::wallets::find_id_by_pubkey(&state.pool, &pubkey).await? {
+        Some(id) => id,
+        None => return Ok(Json(HistoryResponse { transactions: vec![] })),
+    };
+
+    let records = store::transactions::list_for_wallet(&state.pool, wallet_id, limit, before).await?;
+    let transactions = records
+        .into_iter()
+        .map(|r| TransactionRecord {
+            signature: r.signature,
+            status: r.status,
+            to: r.to_address,
+            amount: r.amount,
+            mint: r.mint,
+            created_at: r.created_at,
+        })
+        .collect();
+
+    Ok(Json(HistoryResponse { transactions }))
 }
 
 /// Validates that `pubkey` is a base58-encoded 32-byte Ed25519 public key. Rejecting a

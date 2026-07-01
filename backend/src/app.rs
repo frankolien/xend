@@ -16,6 +16,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health::health))
         .route("/v1/wallets", post(wallet::register))
         .route("/v1/wallets/:pubkey/balance", get(wallet::balance))
+        .route("/v1/wallets/:pubkey/transactions", get(wallet::history))
         .route("/v1/tx/build", post(tx::build))
         .route("/v1/tx/submit", post(tx::submit))
         .route("/v1/tx/:signature", get(tx::status))
