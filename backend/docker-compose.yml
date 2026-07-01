@@ -1,0 +1,26 @@
+# Local development dependencies for the Xend backend. Brings up the Postgres instance
+# the backend connects to by default (postgres://xend:xend@localhost:5432/xend).
+#
+#   docker compose up -d     # start Postgres in the background
+#   cargo run                # run the backend against it (applies migrations on boot)
+#   docker compose down      # stop it  (add -v to also delete the data volume)
+services:
+  postgres:
+    image: postgres:16
+    container_name: xend-postgres
+    environment:
+      POSTGRES_USER: xend
+      POSTGRES_PASSWORD: xend
+      POSTGRES_DB: xend
+    ports:
+      - "5432:5432"
+    volumes:
+      - xend-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xend -d xend"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  xend-pgdata:
