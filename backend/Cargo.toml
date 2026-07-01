@@ -15,6 +15,10 @@ bs58 = "0.5" # validate Solana base58 addresses at the edge
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+solana-sdk = "4.0.1"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Solana RPC/WSS client — the ONLY component holding RPC credentials. Pinned + audited.
 # solana-client = "..."   # wired in Phase 2 (kept out until the signing path lands)

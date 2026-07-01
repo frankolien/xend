@@ -1,7 +1,7 @@
 # Rust
 /backend/target/
 **/*.rs.bk
-Cargo.lock  # keep for the binary once we ship; ignored during scaffolding churn
+# Cargo.lock is intentionally committed for the backend binary (reproducible builds).
 
 # Dart / Flutter
 .dart_tool/
