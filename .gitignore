@@ -1,0 +1,33 @@
+# Rust
+/backend/target/
+**/*.rs.bk
+Cargo.lock  # keep for the binary once we ship; ignored during scaffolding churn
+
+# Dart / Flutter
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# Swift / Xcode
+xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+.build/
+*.xcuserstate
+
+# Secrets — NEVER commit. RPC keys, JWT secrets, .env live outside git.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log
