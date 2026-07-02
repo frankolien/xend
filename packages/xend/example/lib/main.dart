@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Clipboard
 import 'package:xend/xend.dart';
@@ -453,11 +455,108 @@ class _SendSheetState extends State<_SendSheet> {
   bool _sending = false;
   String? _error;
 
+  // Live preview of a .sol name's address, updated as the recipient is typed.
+  Timer? _debounce;
+  bool _resolving = false;
+  String? _resolvedAddress;
+  String? _resolveError;
+
+  @override
+  void initState() {
+    super.initState();
+    _toController.addListener(_onRecipientChanged);
+  }
+
   @override
   void dispose() {
+    _debounce?.cancel();
     _toController.dispose();
     _amountController.dispose();
     super.dispose();
+  }
+
+  void _onRecipientChanged() {
+    _debounce?.cancel();
+    final input = _toController.text.trim();
+    if (!_isSolName(input)) {
+      if (_resolving || _resolvedAddress != null || _resolveError != null) {
+        setState(() {
+          _resolving = false;
+          _resolvedAddress = null;
+          _resolveError = null;
+        });
+      }
+      return;
+    }
+    setState(() {
+      _resolving = true;
+      _resolvedAddress = null;
+      _resolveError = null;
+    });
+    _debounce = Timer(const Duration(milliseconds: 400), () => _resolve(input));
+  }
+
+  Future<void> _resolve(String name) async {
+    try {
+      final address = await XendWallet.resolveName(name);
+      if (!mounted || _toController.text.trim() != name) return;
+      setState(() {
+        _resolvedAddress = address;
+        _resolving = false;
+      });
+    } on InvalidRecipient {
+      if (!mounted || _toController.text.trim() != name) return;
+      setState(() {
+        _resolveError = 'Name not found';
+        _resolving = false;
+      });
+    } on XendError {
+      if (!mounted || _toController.text.trim() != name) return;
+      setState(() {
+        _resolveError = 'Could not resolve name';
+        _resolving = false;
+      });
+    }
+  }
+
+  bool _isSolName(String value) => value.toLowerCase().endsWith('.sol');
+
+  Widget _resolvePreview() {
+    final Widget content;
+    if (_resolving) {
+      content = const Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 8),
+          Text('Resolving…'),
+        ],
+      );
+    } else if (_resolveError != null) {
+      content = Text(
+        _resolveError!,
+        style: TextStyle(color: Theme.of(context).colorScheme.error),
+      );
+    } else if (_resolvedAddress != null) {
+      content = Row(
+        children: [
+          const Icon(Icons.check_circle, size: 16, color: Colors.green),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              '→ ${_short(_resolvedAddress!)}',
+              style: const TextStyle(fontFamily: 'Menlo', fontSize: 13),
+            ),
+          ),
+        ],
+      );
+    } else {
+      content = const SizedBox.shrink();
+    }
+    return Padding(padding: const EdgeInsets.only(top: 8), child: content);
   }
 
   Future<void> _send() async {
@@ -513,11 +612,12 @@ class _SendSheetState extends State<_SendSheet> {
             controller: _toController,
             enabled: !_sending,
             decoration: const InputDecoration(
-              labelText: 'Recipient address',
+              labelText: 'Recipient address or .sol name',
               border: OutlineInputBorder(),
             ),
             style: const TextStyle(fontFamily: 'Menlo', fontSize: 14),
           ),
+          if (_isSolName(_toController.text.trim())) _resolvePreview(),
           const SizedBox(height: 12),
           TextField(
             controller: _amountController,
