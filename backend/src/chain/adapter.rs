@@ -1,6 +1,5 @@
-//! The chain-agnostic port. Every supported blockchain implements [`ChainAdapter`]; the
-//! rest of the backend depends only on this trait and the domain types here, never on a
-//! chain-specific client.
+//! Chain-agnostic port. Every supported blockchain implements [`ChainAdapter`]; the rest
+//! of the backend depends only on this trait and the domain types here.
 
 use std::time::SystemTime;
 
@@ -10,19 +9,19 @@ use crate::error::AppError;
 
 /// An unsigned transaction, ready to be sent to the device for signing.
 pub struct UnsignedTx {
-    /// The serialized transaction message to sign (base64-encoded at the API edge).
+    /// Serialized transaction message to sign (base64-encoded at the API edge).
     pub message: Vec<u8>,
-    /// The instant after which the transaction is no longer valid (for example, when its
-    /// blockhash expires). Past this point it must be rebuilt rather than broadcast.
+    /// Instant after which the transaction is no longer valid, e.g. when its blockhash
+    /// expires. Past this point it must be rebuilt, not broadcast.
     pub valid_until: SystemTime,
-    /// When fees are sponsored, the fee payer's signature over [`message`], already
-    /// produced by the backend. The device adds only its own signature; both are assembled
-    /// into the wire transaction in signer order. `None` when the sender pays their own fee.
+    /// Fee payer's signature over [`message`] when fees are sponsored. The device adds its
+    /// own signature; both go into the wire transaction in signer order. `None` when the
+    /// sender pays their own fee.
     pub fee_payer_signature: Option<Vec<u8>>,
 }
 
-/// A transaction's degree of finality on the network. The adapter reports the actual
-/// level reached; the client decides which level to treat as success.
+/// A transaction's finality level. The adapter reports the level reached; the client
+/// decides which level counts as success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Commitment {
     Processed,
@@ -31,8 +30,8 @@ pub enum Commitment {
     Failed,
 }
 
-/// A chain-agnostic transfer request. A `mint` of `None` denotes the chain's native
-/// asset; `amount` is in the asset's smallest indivisible unit.
+/// A chain-agnostic transfer request. `mint` of `None` means the chain's native asset;
+/// `amount` is in the asset's smallest unit.
 pub struct TransferIntent {
     pub from: String,
     pub to: String,
@@ -48,18 +47,17 @@ pub struct TransferIntent {
 /// `status` reports the current commitment for a signature. `balance` reads an address.
 ///
 /// Re-broadcasting identical signed bytes is safe: the network treats them as the same
-/// transaction, which is what makes retrying a stalled transaction correct.
+/// transaction, so retrying a stalled transaction is correct.
 #[async_trait]
 pub trait ChainAdapter: Send + Sync {
-    /// The chain's name, used in logs and metrics.
+    /// Chain name, used in logs and metrics.
     fn chain(&self) -> &'static str;
 
     /// Assembles an unsigned transfer for the given intent.
     async fn build_transfer(&self, intent: &TransferIntent) -> Result<UnsignedTx, AppError>;
 
-    /// Resolves a chain-native human-readable name (such as a Solana `.sol` domain) to an
-    /// address. Returns [`AppError::InvalidRecipient`] when the name is malformed or not
-    /// registered.
+    /// Resolves a chain-native name (such as a Solana `.sol` domain) to an address. Returns
+    /// [`AppError::InvalidRecipient`] when the name is malformed or unregistered.
     async fn resolve_name(&self, name: &str) -> Result<String, AppError>;
 
     /// Validates a signed payload before broadcast: well-formed, signature present, and
@@ -73,6 +71,6 @@ pub trait ChainAdapter: Send + Sync {
     async fn status(&self, signature: &str) -> Result<Commitment, AppError>;
 
     /// Returns the balance of `address` in base units. `mint` selects a token, or `None`
-    /// for the chain's native asset.
+    /// for the native asset.
     async fn balance(&self, address: &str, mint: Option<&str>) -> Result<u128, AppError>;
 }

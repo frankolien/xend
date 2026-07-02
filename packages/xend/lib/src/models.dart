@@ -1,14 +1,12 @@
-/// The value types of the Xend public API.
+/// Value types of the Xend public API.
 ///
-/// Monetary amounts are always represented in an asset's smallest indivisible unit as a
-/// [BigInt]; conversion to a human-readable decimal happens only at the presentation
-/// layer.
+/// Monetary amounts are always in an asset's smallest indivisible unit as a [BigInt].
+/// Convert to a human-readable decimal only at the presentation layer.
 
 /// The blockchains supported by the Xend SDK.
 ///
-/// This release implements [solana]. The remaining values are defined so that the API
-/// surface stays stable as support is added; requesting one today throws
-/// [NotImplementedYet].
+/// This release implements [solana]. The other values keep the API surface stable as
+/// support is added; requesting one today throws [NotImplementedYet].
 enum Chain {
   solana,
   ethereum,
@@ -25,8 +23,8 @@ enum Chain {
 class Asset {
   /// Creates an asset descriptor.
   ///
-  /// [decimals] is the number of fractional digits the asset uses (for example, 9 for
-  /// SOL, 6 for USDC) and is applied only when formatting amounts for display.
+  /// [decimals] is the asset's number of fractional digits (9 for SOL, 6 for USDC), used
+  /// only when formatting amounts for display.
   const Asset({
     required this.chain,
     this.mint,
@@ -64,11 +62,10 @@ class Balance {
   final BigInt amount;
 }
 
-/// An opaque reference to a submitted transaction, used to observe its progress with
-/// [XendWallet.watch].
+/// An opaque reference to a submitted transaction, used with [XendWallet.watch] to
+/// observe its progress.
 ///
-/// This is not the on-chain transaction signature, which may not yet exist when the
-/// handle is created.
+/// Not the on-chain signature, which may not exist yet when the handle is created.
 class TxHandle {
   const TxHandle(this.id);
 
@@ -79,11 +76,11 @@ class TxHandle {
   String toString() => 'TxHandle($id)';
 }
 
-/// The degree of finality a transaction has reached on the network.
+/// How final a transaction is on the network.
 ///
-/// Ordered from least to most final: [processed] < [confirmed] < [finalized]. A
-/// [confirmed] transaction is highly likely to succeed but can, in rare cases, be
-/// rolled back; a [finalized] transaction cannot.
+/// Ordered least to most final: [processed] < [confirmed] < [finalized]. A [confirmed]
+/// transaction is very likely to succeed but can rarely be rolled back; a [finalized]
+/// one cannot.
 enum TxCommitment { processed, confirmed, finalized }
 
 /// A point-in-time status for a transaction, emitted by [XendWallet.watch].

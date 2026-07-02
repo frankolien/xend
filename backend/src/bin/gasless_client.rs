@@ -1,11 +1,11 @@
 //! Dev utility: exercise the gasless (fee-sponsored) send path against a running backend,
-//! end to end, exactly as the mobile SDK does — build, sign with the user key, assemble the
+//! end to end, as the mobile SDK does: build, sign with the user key, assemble the
 //! two-signature wire transaction, and submit.
 //!
 //! Usage:
 //!   cargo run --bin gasless_client -- <base_url> <from_secret_base58> <to_pubkey> <lamports>
 //!
-//! It prints whether the fee was sponsored and the resulting on-chain signature. Fund the
+//! Prints whether the fee was sponsored and the resulting on-chain signature. Fund the
 //! sender with only the transfer `amount` (no fee buffer) to prove the paymaster, not the
 //! sender, paid the network fee. Devnet only.
 
@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http = reqwest::Client::new();
     let b64 = base64::engine::general_purpose::STANDARD;
 
-    // Resolve a `.sol` name to an address first, exactly as the SDK's send() does.
+    // Resolve a `.sol` name to an address first, as the SDK's send() does.
     let to = if to_arg.to_lowercase().ends_with(".sol") {
         let resolved: serde_json::Value = http
             .get(format!("{base_url}/v1/resolve"))
@@ -47,8 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         to_arg
     };
 
-    // 1. Build the unsigned transfer. The backend chooses the fee payer and, when it
-    //    sponsors, returns the fee payer's signature over the message.
+    // 1. Build the unsigned transfer. The backend chooses the fee payer and, when
+    //    sponsoring, returns the fee payer's signature over the message.
     let build: serde_json::Value = http
         .post(format!("{base_url}/v1/tx/build"))
         .json(&serde_json::json!({
@@ -67,8 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Sign the message with the sender's key (the device's role in the SDK).
     let user_sig = from.sign_message(&message);
 
-    // 3. Assemble the wire transaction: compact-u16 signature count, each signature in signer
-    //    order (fee payer first when sponsored, then sender), then the message.
+    // 3. Assemble the wire transaction: compact-u16 signature count, each signature in
+    //    signer order (fee payer first when sponsored, then sender), then the message.
     let mut signatures: Vec<Vec<u8>> = Vec::new();
     if let Some(sig) = fee_payer_sig {
         signatures.push(b64.decode(sig)?);

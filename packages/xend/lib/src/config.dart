@@ -2,8 +2,8 @@ import 'backend_client.dart';
 
 /// Configuration for the Xend SDK.
 ///
-/// Create an instance and pass it to [Xend.configure] once during application startup,
-/// before creating or loading a wallet.
+/// Pass an instance to [Xend.configure] once at startup, before creating or loading a
+/// wallet.
 class XendConfig {
   /// Creates a configuration targeting the Xend backend at [backendUrl].
   const XendConfig({required this.backendUrl, this.apiKey});
@@ -12,8 +12,8 @@ class XendConfig {
   final String backendUrl;
 
   /// Optional API key, sent as `Authorization: Bearer <key>` on every request. Required
-  /// when the backend has authentication enabled; may be omitted against a development
-  /// backend that runs with authentication disabled.
+  /// when the backend has authentication enabled; omit it against a dev backend with auth
+  /// disabled.
   final String? apiKey;
 }
 
@@ -46,7 +46,7 @@ class Xend {
       _config ??
       (throw StateError('Xend.configure() must be called before use.'));
 
-  /// The shared backend client. Intended for internal use within the SDK.
+  /// The shared backend client. For internal SDK use.
   static BackendClient get backend =>
       _backend ??
       (throw StateError('Xend.configure() must be called before use.'));

@@ -1,11 +1,9 @@
 import Flutter
 import UIKit
 
-/// Bridges Dart and the native signer over the `ai.xend/secure` method channel. This is
-/// the only code that touches both Flutter and `SecureSigner`. It parses channel
-/// arguments, dispatches to the four signer methods off the main thread so that keychain
-/// and biometric work never blocks the UI, and maps `SecureSignerError` values to stable
-/// `FlutterError` codes that the Dart layer translates into typed errors.
+/// Bridges Dart and `SecureSigner` over the `ai.xend/secure` method channel. Parses channel
+/// arguments, dispatches to the signer off the main thread so keychain and biometric work
+/// don't block the UI, and maps `SecureSignerError` to stable `FlutterError` codes.
 public class XendSecurePlugin: NSObject, FlutterPlugin {
     private let signer = SecureSigner()
 
@@ -76,8 +74,8 @@ public class XendSecurePlugin: NSObject, FlutterPlugin {
         return value
     }
 
-    /// Maps signer errors to stable channel codes. The Dart layer switches on these
-    /// codes to construct the corresponding typed error.
+    /// Maps signer errors to stable channel codes that the Dart layer switches on to build
+    /// the corresponding typed error.
     private func flutterError(_ error: Error) -> FlutterError {
         guard let e = error as? SecureSignerError else {
             return FlutterError(code: "unknown", message: "\(error)", details: nil)

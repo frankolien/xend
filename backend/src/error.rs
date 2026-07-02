@@ -1,10 +1,9 @@
-//! A single error type mapped to HTTP responses. Every failure from the chain, the
-//! database, or a client becomes a variant of [`AppError`], each mapped to an HTTP
-//! status and a stable `code` string that the SDK's typed errors mirror, so clients can
-//! branch on the failure rather than parse strings.
+//! A single error type mapped to HTTP responses. Every failure from the chain, database,
+//! or a client becomes a variant of [`AppError`], each with an HTTP status and a stable
+//! `code` string the SDK's typed errors mirror, so clients branch on the code rather than
+//! parse strings.
 //!
-//! Internal and database error detail is logged server-side and never included in a
-//! response body.
+//! Internal and database error detail is logged server-side, never in a response body.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -65,7 +64,7 @@ impl IntoResponse for AppError {
             _ => None,
         };
 
-        // Log the full detail server-side; hand the client only a safe message.
+        // Log full detail server-side; return only a safe message to the client.
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = %self, "request failed with internal error");
         }
@@ -78,7 +77,7 @@ impl IntoResponse for AppError {
     }
 }
 
-/// Never leak DB/internal detail to clients; everything else is safe to echo.
+/// Hides DB and internal detail from clients; every other variant is safe to echo.
 fn public_message(e: &AppError) -> String {
     match e {
         AppError::Database(_) | AppError::Internal(_) => "internal error".to_string(),

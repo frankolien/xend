@@ -1,7 +1,6 @@
-//! The gateway: cross-cutting request concerns applied as middleware — API-key
-//! authentication, rate limiting, and request-ID propagation. These wrap the handlers
-//! rather than living inside them, so a handler only ever sees a request that is already
-//! authenticated and within its rate budget.
+//! Cross-cutting request concerns applied as middleware: API-key authentication, rate
+//! limiting, and request-ID propagation. These wrap the handlers, so a handler only sees
+//! requests that are already authenticated and within budget.
 
 pub mod auth;
 pub mod rate_limit;
@@ -13,19 +12,18 @@ use std::time::Duration;
 
 use rate_limit::RateLimiter;
 
-/// The maximum number of requests one caller may make per minute.
+/// Max requests one caller may make per minute.
 const RATE_LIMIT_PER_MINUTE: u32 = 120;
 
-/// Gateway configuration assembled once at startup and shared with the middleware.
+/// Gateway configuration built once at startup and shared with the middleware.
 pub struct Gateway {
     pub api_keys: Arc<HashSet<String>>,
     pub rate_limiter: Arc<RateLimiter>,
 }
 
 impl Gateway {
-    /// Builds the gateway from the environment. `XEND_API_KEYS` is a comma-separated list
-    /// of accepted keys; when it is unset or empty, authentication is disabled for local
-    /// development and a warning is logged.
+    /// Builds the gateway from the environment. `XEND_API_KEYS` is a comma-separated list of
+    /// accepted keys; if unset or empty, authentication is disabled and a warning is logged.
     pub fn from_env() -> Self {
         let api_keys: HashSet<String> = std::env::var("XEND_API_KEYS")
             .unwrap_or_default()

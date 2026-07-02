@@ -1,10 +1,10 @@
-//! The Xend backend entry point. It loads configuration, builds shared state, and serves.
+//! Xend backend entry point. Loads configuration, builds shared state, and serves.
 //! Everything else lives in a dedicated module: the route table in [`app`], the HTTP
 //! handlers in [`handlers`], persistence in [`store`], the chain abstraction in [`chain`],
 //! shared state in [`state`], and error mapping in [`error`].
 //!
-//! The service's capability is bounded by the signing boundary: it reads the chain, builds
-//! unsigned transactions, relays signed ones, and records what happened. It never signs.
+//! The service reads the chain, builds unsigned transactions, relays signed ones, and
+//! records what happened. Signing stays on the device.
 
 mod app;
 mod chain;
@@ -25,8 +25,8 @@ use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Structured JSON logging is initialized up front so request traces are available
-    // throughout. Request-ID propagation and richer telemetry are added later.
+    // Structured JSON logging, initialized up front so request traces are available
+    // throughout. Request-ID propagation and richer telemetry come later.
     tracing_subscriber::fmt().json().init();
 
     let db_url = env::var("DATABASE_URL")
@@ -34,13 +34,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rpc_url = env::var("SOLANA_RPC_URL")
         .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string());
     // `.sol` domains live on mainnet, so name resolution defaults there regardless of which
-    // cluster transfers settle on. A resolved name is just a pubkey, valid on any cluster.
+    // cluster transfers settle on. A resolved name is a pubkey, valid on any cluster.
     let sns_rpc_url = env::var("SNS_RPC_URL")
         .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
 
-    // A configured paymaster turns on gasless transfers: it becomes the fee payer for every
-    // built transaction, so users transact holding no SOL. Absent one, senders pay their own
-    // fee. The secret is a base58 keypair string (as produced by `solana-keygen`).
+    // A configured paymaster enables gasless transfers: it becomes the fee payer for every
+    // built transaction, so users transact holding no SOL. Without one, senders pay their
+    // own fee. The secret is a base58 keypair string (as produced by `solana-keygen`).
     let fee_payer = match env::var("XEND_PAYMASTER_SECRET") {
         Ok(secret) => {
             let keypair = Keypair::from_base58_string(secret.trim());

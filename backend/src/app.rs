@@ -1,7 +1,6 @@
-//! HTTP application wiring: the route table plus the gateway middleware. Public `health`
-//! stays open; the versioned API sits behind API-key auth and rate limiting; request-ID
-//! propagation wraps everything. Kept separate from `main` so the bootstrap stays thin and
-//! the route table is visible in one place.
+//! HTTP wiring: the route table plus gateway middleware. Public `health` stays open; the
+//! versioned API sits behind API-key auth and rate limiting; request-ID propagation wraps
+//! everything. Separate from `main` so the route table lives in one place.
 
 use axum::{
     routing::{get, post},
@@ -14,7 +13,7 @@ use crate::state::AppState;
 
 /// Builds the application router with all routes, shared state, and gateway middleware.
 pub fn router(state: AppState, gw: gateway::Gateway) -> Router {
-    // The versioned API, guarded by auth and rate limiting.
+    // Versioned API, guarded by auth and rate limiting.
     let api = Router::new()
         .route("/wallets", post(wallet::register))
         .route("/wallets/:pubkey/balance", get(wallet::balance))

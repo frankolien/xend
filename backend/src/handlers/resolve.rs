@@ -1,6 +1,6 @@
 //! Name resolution: turn a chain-native name (a Solana `.sol` domain) into an address.
-//! This layer only parses the request and delegates to the chain adapter; the resolution
-//! logic and RPC live in [`crate::chain`].
+//! Parses the request and delegates to the chain adapter; resolution logic and RPC live
+//! in [`crate::chain`].
 
 use axum::{
     extract::{Query, State},
@@ -13,22 +13,22 @@ use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub struct ResolveQuery {
-    /// The name to resolve, such as `gift.sol`.
+    /// Name to resolve, such as `gift.sol`.
     pub name: String,
 }
 
 #[derive(Serialize)]
 pub struct ResolveResponse {
-    /// The name that was resolved, echoed back for the caller's convenience.
+    /// The resolved name, echoed back.
     pub name: String,
     /// The resolved base58 address.
     pub address: String,
 }
 
-/// `GET /v1/resolve?name=gift.sol` — resolve a name to an address.
+/// `GET /v1/resolve?name=gift.sol` resolves a name to an address.
 ///
-/// Returns `invalid_recipient` if the name is malformed or not registered, so a client can
-/// treat an unresolvable name the same as a bad address.
+/// Returns `invalid_recipient` if the name is malformed or unregistered, so a client can
+/// treat an unresolvable name like a bad address.
 pub async fn resolve(
     State(state): State<AppState>,
     Query(query): Query<ResolveQuery>,

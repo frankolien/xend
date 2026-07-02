@@ -1,5 +1,5 @@
 //! Wallet endpoints: register a public key and report balances. Only public keys are
-//! handled here; a private key is never generated or stored.
+//! handled here; private keys are never generated or stored.
 
 use axum::{
     extract::{Path, Query, State},
@@ -25,9 +25,8 @@ pub struct RegisterWalletResponse {
     pub pubkey: String,
 }
 
-/// `POST /v1/wallets` — register a base58 public key. Idempotent: registering an
-/// already-known key returns its existing wallet id rather than failing, so a client
-/// retry is safe.
+/// `POST /v1/wallets` registers a base58 public key. Idempotent: registering a known key
+/// returns its existing wallet id rather than failing, so a retry is safe.
 pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterWalletRequest>,
@@ -54,10 +53,10 @@ pub struct BalanceResponse {
     pub mint: Option<String>,
 }
 
-/// `GET /v1/wallets/:pubkey/balance` — the wallet's balance in base units.
+/// `GET /v1/wallets/:pubkey/balance` returns the wallet's balance in base units.
 ///
-/// Reads through the active chain adapter, so it stays chain-agnostic. Only public data
-/// is involved; no authentication is required to read a public balance.
+/// Reads through the active chain adapter. Balances are public, so no authentication is
+/// required.
 pub async fn balance(
     State(state): State<AppState>,
     Path(pubkey): Path<String>,
@@ -94,8 +93,8 @@ pub struct HistoryResponse {
     pub transactions: Vec<TransactionRecord>,
 }
 
-/// `GET /v1/wallets/:pubkey/transactions` — the wallet's transaction history, most recent
-/// first. An unregistered wallet simply has no history and returns an empty list.
+/// `GET /v1/wallets/:pubkey/transactions` returns the wallet's transaction history, most
+/// recent first. An unregistered wallet has no history and returns an empty list.
 pub async fn history(
     State(state): State<AppState>,
     Path(pubkey): Path<String>,

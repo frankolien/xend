@@ -2,13 +2,9 @@ import Foundation
 import CryptoKit
 import Security
 
-/// BIP-39 mnemonics and the Solana key derivation built on them: SLIP-0010 ed25519 along
-/// `m/44'/501'/0'/0'`, the path used by Phantom and other Solana wallets, so a phrase
-/// generated here restores in them and vice versa.
-///
-/// Every operation runs on-device. A derived private key is produced here, wrapped by the
-/// Secure Enclave, and never returned across the platform channel; only the public address
-/// and — once, for the user to write down — the mnemonic leave this layer.
+/// BIP-39 mnemonics and Solana key derivation: SLIP-0010 ed25519 along `m/44'/501'/0'/0'`,
+/// the path used by Phantom and other Solana wallets, so a phrase generated here restores
+/// in them and vice versa. Runs entirely on-device.
 enum Mnemonic {
 
     enum MnemonicError: Error {
@@ -17,7 +13,7 @@ enum Mnemonic {
         case invalidChecksum
     }
 
-    /// Reverse index from word to its position, built once from the wordlist.
+    /// Word-to-position index, built once from the wordlist.
     private static let wordIndex: [String: Int] = {
         var index = [String: Int](minimumCapacity: Bip39Wordlist.words.count)
         for (position, word) in Bip39Wordlist.words.enumerated() {
@@ -92,7 +88,7 @@ enum Mnemonic {
 
     // MARK: - Solana key derivation
 
-    /// Derives the Solana signing key — a 32-byte ed25519 seed — from `mnemonic` along
+    /// Derives the Solana signing key, a 32-byte ed25519 seed, from `mnemonic` along
     /// `m/44'/501'/0'/0'`.
     static func solanaPrivateKey(from mnemonic: String, passphrase: String = "") -> Data {
         solanaPrivateKey(fromSeed: seed(from: mnemonic, passphrase: passphrase))
@@ -143,8 +139,8 @@ enum Mnemonic {
 
     // MARK: - Primitives
 
-    /// PBKDF2-HMAC-SHA512. The output is at most one SHA-512 block for our 64-byte length,
-    /// but the block loop is written in full so the routine is correct for any length.
+    /// PBKDF2-HMAC-SHA512. Our 64-byte length fits one SHA-512 block, but the block loop is
+    /// written in full so the routine is correct for any length.
     private static func pbkdf2SHA512(password: Data, salt: Data, iterations: Int, length: Int) -> Data {
         let key = SymmetricKey(data: password)
         var output = Data()
@@ -175,9 +171,8 @@ enum Mnemonic {
         .joined()
     }
 
-    /// BIP-39 requires NFKD normalization of the mnemonic and passphrase before use. The
-    /// English wordlist is ASCII, so this is an identity for generated phrases, but it is
-    /// applied for correctness with imported phrases and passphrases.
+    /// NFKD normalization, required by BIP-39 before use. A no-op for the ASCII English
+    /// wordlist, but needed for correctness with imported phrases and passphrases.
     private static func normalize(_ text: String) -> String {
         text.decomposedStringWithCompatibilityMapping
     }

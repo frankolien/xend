@@ -1,14 +1,13 @@
-//! Queries over the `wallets` table. Wallets hold only a public key and an optional
-//! label — never any private key material.
+//! Queries over the `wallets` table. Wallets hold only a public key and an optional label,
+//! never private key material.
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
 
-/// Inserts a wallet for `pubkey`, or returns the existing wallet's id if the key is
-/// already registered, updating the label when a new one is supplied. Idempotent, so a
-/// client retry is safe.
+/// Inserts a wallet for `pubkey`, or returns the existing wallet's id if the key is already
+/// registered, updating the label when a new one is supplied. Idempotent; safe to retry.
 pub async fn upsert(pool: &PgPool, pubkey: &str, label: Option<&str>) -> Result<Uuid, AppError> {
     let row: (Uuid,) = sqlx::query_as(
         "insert into wallets (id, pubkey, label)

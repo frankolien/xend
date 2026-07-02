@@ -1,10 +1,10 @@
-//! Transaction endpoints: build an unsigned transfer, submit a signed one, and report
-//! status. This layer never signs — it assembles and relays; the device holds the key.
+//! Build, submit, and status endpoints. Signing happens on the device, not here; this
+//! layer assembles and relays.
 //!
-//! Idempotency is the core correctness property of `submit`: a client attaches an
-//! `idempotency_key`, the ledger enforces its uniqueness, and a duplicate returns the
-//! original result instead of broadcasting again. Combined with the deterministic
-//! signature of a signed transaction, a blind retry can never produce a double-send.
+//! `submit` is idempotent: a client attaches an `idempotency_key`, the ledger enforces
+//! its uniqueness, and a duplicate returns the original result instead of broadcasting
+//! again. With the deterministic signature of a signed transaction, a blind retry cannot
+//! double-send.
 
 use axum::{
     extract::{Path, State},
@@ -35,14 +35,14 @@ pub struct BuildResponse {
     /// Unix timestamp (seconds) after which the transaction is no longer valid.
     pub valid_until: u64,
     /// Base64-encoded fee-payer signature over `message`, present only when fees are
-    /// sponsored. The device assembles it ahead of its own signature into the wire
-    /// transaction; when absent, the sender pays their own fee and signs alone.
+    /// sponsored. The device assembles it ahead of its own signature. When absent, the
+    /// sender pays their own fee and signs alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_payer_signature: Option<String>,
 }
 
-/// `POST /v1/tx/build` — assemble an unsigned transfer for the device to sign.
-/// Delegates to the active chain adapter, keeping this handler chain-agnostic.
+/// `POST /v1/tx/build` assembles an unsigned transfer for the device to sign. Delegates
+/// to the active chain adapter.
 pub async fn build(
     State(state): State<AppState>,
     Json(req): Json<BuildRequest>,
@@ -84,7 +84,7 @@ pub async fn build(
 pub struct SubmitRequest {
     /// Base64-encoded, fully-signed transaction in the chain's wire format.
     pub signed: String,
-    /// Client-supplied key that makes a retry safe: a duplicate never re-broadcasts.
+    /// Client-supplied key that makes a retry safe: a duplicate does not re-broadcast.
     pub idempotency_key: String,
     /// Sender address, used to associate the transaction with a registered wallet.
     pub pubkey: Option<String>,
@@ -98,17 +98,16 @@ pub struct SubmitRequest {
 
 #[derive(Serialize)]
 pub struct SubmitResponse {
-    /// The on-chain transaction signature.
+    /// On-chain transaction signature.
     pub signature: String,
-    /// The recorded lifecycle state (`submitted` immediately after broadcast).
+    /// Recorded lifecycle state (`submitted` immediately after broadcast).
     pub status: String,
 }
 
-/// `POST /v1/tx/submit` — broadcast a signed transaction exactly once.
+/// `POST /v1/tx/submit` broadcasts a signed transaction exactly once.
 ///
-/// If a submission with the same key has already produced a signature, that signature is
-/// returned and nothing is broadcast — so a client that retries after a lost response
-/// cannot double-send.
+/// If the same key already produced a signature, that signature is returned and nothing
+/// is broadcast, so a client that retries after a lost response cannot double-send.
 pub async fn submit(
     State(state): State<AppState>,
     Json(req): Json<SubmitRequest>,
@@ -117,8 +116,8 @@ pub async fn submit(
         .decode(&req.signed)
         .map_err(|_| AppError::BadRequest("signed transaction is not valid base64".into()))?;
 
-    // Fast path: this key already produced a signature. Return it without re-broadcasting.
-    // Otherwise claim the key with a pending row so a retry finds it here next time.
+    // Fast path: this key already produced a signature, so return it without
+    // re-broadcasting. Otherwise claim the key with a pending row so a retry finds it here.
     if let Some(existing) = store::transactions::find_by_idempotency(&state.pool, &req.idempotency_key).await? {
         if let Some(signature) = existing.signature {
             return Ok(Json(SubmitResponse {
@@ -161,11 +160,10 @@ pub struct StatusResponse {
     pub status: String,
 }
 
-/// `GET /v1/tx/:signature` — report a transaction's current commitment.
+/// `GET /v1/tx/:signature` reports a transaction's current commitment.
 ///
-/// This is the authoritative answer to "did it actually happen?" and lets a client
-/// resolve the ambiguity of a timed-out submit: on a blockchain a timeout may hide a
-/// success, so a client queries status rather than assuming failure.
+/// Lets a client resolve a timed-out submit: a timeout may hide a success, so the client
+/// queries status rather than assuming failure.
 pub async fn status(
     State(state): State<AppState>,
     Path(signature): Path<String>,

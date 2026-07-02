@@ -10,22 +10,20 @@ import 'errors.dart';
 import 'models.dart';
 import 'secure_channel.dart';
 
-/// A non-custodial wallet: an on-device key pair together with the operations to
-/// observe and move the value it controls.
+/// A non-custodial wallet: an on-device key pair plus the operations to observe and move
+/// the value it controls.
 ///
-/// The private key is generated on the device's secure hardware and never leaves it.
-/// Signing happens on-device behind biometric authentication; the Xend service only
-/// ever handles public keys, unsigned transaction requests, and already-signed
-/// transactions, and can never move funds on its own.
+/// The private key is generated in the device's secure hardware and stays there. Signing
+/// happens on-device behind biometric authentication. The Xend service only handles
+/// public keys, unsigned transaction requests, and signed transactions, and cannot move
+/// funds on its own.
 ///
 /// Obtain a wallet with [create] (a new key pair), [restore] (from a recovery phrase),
-/// or [load] (an existing on-device wallet). Call [Xend.configure] once before any of
-/// these.
+/// or [load] (an existing on-device wallet). Call [Xend.configure] once first.
 ///
-/// Monetary amounts are always expressed in an asset's smallest indivisible unit as a
-/// [BigInt]; formatting to a human-readable decimal is the caller's responsibility.
-/// Operations accept a [Chain] and default to [Chain.solana]; other chains are not yet
-/// supported and throw [NotImplementedYet].
+/// Monetary amounts are always in an asset's smallest indivisible unit as a [BigInt];
+/// formatting to a decimal is the caller's job. Operations take a [Chain] and default to
+/// [Chain.solana]; other chains throw [NotImplementedYet].
 ///
 /// ```dart
 /// final wallet = await XendWallet.create(label: 'Main');
@@ -34,12 +32,11 @@ import 'secure_channel.dart';
 class XendWallet {
   XendWallet._(this._walletId, this.address, this.chain);
 
-  /// Opaque handle used to reference this wallet's key within the device's secure
-  /// store. It is never the key material itself.
+  /// Opaque handle for this wallet's key in the device's secure store. Never the key
+  /// material itself.
   ///
-  /// This release manages a single wallet, stored under a fixed identifier so it can be
-  /// reloaded after the app restarts. Support for multiple concurrent wallets is
-  /// planned.
+  /// This release manages a single wallet under a fixed identifier so it can be reloaded
+  /// after an app restart. Multiple concurrent wallets are planned.
   static const String _defaultWalletId = 'default';
 
   final String _walletId;
@@ -52,15 +49,15 @@ class XendWallet {
 
   /// Creates a new wallet with a freshly generated key pair.
   ///
-  /// The key pair is generated inside the device's secure hardware; only the public
-  /// [address] is returned. The public key is registered with the configured Xend
-  /// backend so that balances and history can be served.
+  /// The key pair is generated in the device's secure hardware; only the public [address]
+  /// is returned. The public key is registered with the configured backend to serve
+  /// balances and history.
   ///
-  /// [label] is an optional human-readable name for the wallet. [chain] selects the
-  /// target blockchain and defaults to [Chain.solana].
+  /// [label] is an optional name for the wallet. [chain] selects the target blockchain
+  /// and defaults to [Chain.solana].
   ///
-  /// Throws [NetworkError] if the backend cannot be reached, or [NotImplementedYet] if
-  /// a chain other than Solana is requested.
+  /// Throws [NetworkError] if the backend is unreachable, or [NotImplementedYet] for a
+  /// chain other than Solana.
   static Future<XendWallet> create({
     String? label,
     Chain chain = Chain.solana,
@@ -69,9 +66,9 @@ class XendWallet {
     const channel = SecureChannel();
     final String address;
     try {
-      // The recovery phrase is generated and stored on-device but is not surfaced here:
-      // onboarding stays silent (embedded-wallet style). Retrieve it later, only if the
-      // user explicitly asks, via [revealRecoveryPhrase].
+      // The recovery phrase is generated and stored on-device but not returned here, so
+      // onboarding stays silent (embedded-wallet style). Retrieve it later via
+      // [revealRecoveryPhrase] if the user asks.
       address = (await channel.generateKeyPair(_defaultWalletId)).address;
     } on PlatformException catch (e) {
       throw _mapNativeError(e);
@@ -80,15 +77,14 @@ class XendWallet {
     return XendWallet._(_defaultWalletId, address, chain);
   }
 
-  /// Loads the wallet for this user, or `null` if there is none to load.
+  /// Loads the wallet for this user, or `null` if there is none.
   ///
-  /// Typically called on startup. If a wallet already exists on this device it is returned
-  /// immediately, with no network request and without the key ever leaving the device. If
-  /// this is a fresh device but the user set up a wallet elsewhere, its recovery seed
-  /// arrives silently through iCloud Keychain and the on-device signing key is rebuilt from
-  /// it — the wallet simply reappears, with no recovery phrase to enter. In that recovery
-  /// case only, the address is re-registered with the backend (idempotently) so balances
-  /// and history resolve on the new device.
+  /// Usually called on startup. An existing on-device wallet is returned immediately, with
+  /// no network request. On a fresh device where the user set up a wallet elsewhere, the
+  /// recovery seed syncs in through iCloud Keychain and the signing key is rebuilt from it,
+  /// with no recovery phrase to enter. In that recovery case only, the address is
+  /// re-registered with the backend (idempotently) so balances and history resolve on the
+  /// new device.
   static Future<XendWallet?> load({Chain chain = Chain.solana}) async {
     _requireSolana(chain, 'XendWallet.load');
     const channel = SecureChannel();
@@ -108,7 +104,7 @@ class XendWallet {
   /// Restores a wallet from its BIP-39 recovery phrase, re-deriving the same key on-device
   /// and registering its address. Use this to move a wallet to a new device.
   ///
-  /// Throws [InvalidRecoveryPhrase] if [mnemonic] is not a valid BIP-39 phrase.
+  /// Throws [InvalidRecoveryPhrase] if [mnemonic] is not valid BIP-39.
   static Future<XendWallet> restore(
     String mnemonic, {
     Chain chain = Chain.solana,
@@ -125,9 +121,9 @@ class XendWallet {
     return XendWallet._(_defaultWalletId, address, chain);
   }
 
-  /// Reveals this wallet's recovery phrase behind biometric authentication, so the user
-  /// can back it up after creation. The returned phrase is sensitive: display it, let the
-  /// user record it, and discard it — never persist or transmit it.
+  /// Reveals this wallet's recovery phrase behind biometric authentication so the user can
+  /// back it up after creation. The returned phrase is sensitive: display it, let the user
+  /// record it, then discard it. Never persist or transmit it.
   ///
   /// [reason] is shown in the authentication prompt. Throws [UserCancelledAuth] if the
   /// prompt is dismissed.
@@ -147,8 +143,8 @@ class XendWallet {
   /// This is irreversible: without the recovery phrase, the wallet cannot be recovered.
   Future<void> delete() => const SecureChannel().deleteKey(_walletId);
 
-  /// Returns the balance of [asset], or the chain's native asset when [asset] is
-  /// omitted. The value is expressed in the asset's smallest indivisible unit.
+  /// Returns the balance of [asset], or the chain's native asset when [asset] is omitted,
+  /// in the asset's smallest indivisible unit.
   ///
   /// Pass a token [asset] (one with a `mint`) to read an SPL token balance, such as USDC.
   Future<Balance> balance({Asset? asset}) async {
@@ -160,20 +156,18 @@ class XendWallet {
   /// Sends [amount] of [asset] to [to], which may be an address or a `.sol` name (such as
   /// `gift.sol`) that is resolved automatically.
   ///
-  /// The transaction is built by the Xend backend, signed on this device behind
-  /// biometric authentication, and then broadcast. The method returns as soon as the
-  /// transaction is submitted, yielding a [TxHandle]; use [watch] to observe
-  /// confirmation. It intentionally does not wait for final confirmation.
+  /// The transaction is built by the backend, signed on-device behind biometric
+  /// authentication, then broadcast. Returns a [TxHandle] as soon as the transaction is
+  /// submitted, without waiting for confirmation; use [watch] to observe it.
   ///
-  /// [amount] is expressed in the asset's smallest indivisible unit (for example,
-  /// lamports for SOL). [asset] defaults to the native asset of [chain]. Supply
-  /// [idempotencyKey] to make a retry safe; if omitted, one is generated per call.
-  /// [successAt] selects the commitment level at which [watch] reports success.
+  /// [amount] is in the asset's smallest indivisible unit (lamports for SOL). [asset]
+  /// defaults to the native asset of [chain]. Supply [idempotencyKey] to make a retry
+  /// safe; if omitted, one is generated per call. [successAt] selects the commitment level
+  /// at which [watch] reports success.
   ///
-  /// In this release the returned handle's id is the on-chain transaction signature,
-  /// which can be looked up on a block explorer. Pass a token [asset] (one with a `mint`)
-  /// to send an SPL token such as USDC; the recipient's token account is created
-  /// automatically if it does not exist yet.
+  /// In this release the handle's id is the on-chain signature, which can be looked up on
+  /// a block explorer. Pass a token [asset] (one with a `mint`) to send an SPL token such
+  /// as USDC; the recipient's token account is created automatically if needed.
   ///
   /// Throws:
   ///  * [InsufficientFunds] if the balance cannot cover the amount and fees.
@@ -202,13 +196,13 @@ class XendWallet {
     }
     final mint = asset?.mint;
 
-    // Resolve a `.sol` name to its address up front, so building, signing, and the recorded
-    // recipient all use the same concrete address. A plain address passes through unchanged.
+    // Resolve a `.sol` name to its address up front, so building, signing, and the
+    // recorded recipient all use the same address. A plain address passes through.
     final recipient = await resolveName(to);
 
-    // 1. The backend assembles the unsigned transfer, fetching the recent blockhash the
-    //    device must not compute for itself. When fees are sponsored it also returns the
-    //    fee payer's signature, so the user can send holding no SOL.
+    // 1. The backend assembles the unsigned transfer, including the recent blockhash the
+    //    device must not compute itself. For sponsored fees it also returns the fee
+    //    payer's signature, so the user can send holding no SOL.
     final built = await Xend.backend.buildTransfer(
       from: address,
       to: recipient,
@@ -217,8 +211,8 @@ class XendWallet {
     );
     final message = base64Decode(built.message);
 
-    // 2. Sign on-device behind biometric authentication. The private key never leaves the
-    //    device's secure hardware; only the 64-byte signature is returned.
+    // 2. Sign on-device behind biometric authentication. The private key stays in secure
+    //    hardware; only the 64-byte signature is returned.
     final Uint8List signature;
     try {
       signature = await const SecureChannel().signMessage(
@@ -231,9 +225,9 @@ class XendWallet {
     }
 
     // 3. Assemble the signed transaction in wire format and broadcast it. A sponsored
-    //    transfer carries the fee payer's signature ahead of the sender's, in signer order;
-    //    an unsponsored one carries the sender's alone. The idempotency key makes the whole
-    //    build-sign-submit round trip safe to retry.
+    //    transfer carries the fee payer's signature ahead of the sender's, in signer
+    //    order; an unsponsored one carries the sender's alone. The idempotency key makes
+    //    the whole build-sign-submit round trip safe to retry.
     final feePayerSignature = built.feePayerSignature;
     final signatures = <Uint8List>[
       if (feePayerSignature != null) base64Decode(feePayerSignature),
@@ -255,22 +249,20 @@ class XendWallet {
   /// Returns the address at which this wallet can receive funds.
   String receive() => address;
 
-  /// Resolves a human-readable name to an address, so an app can display or validate a
-  /// destination before sending. Solana `.sol` domains (such as `gift.sol`) resolve through
-  /// the Solana Name Service; a value that is already an address is returned unchanged.
+  /// Resolves a name to an address, for displaying or validating a destination before
+  /// sending. Solana `.sol` domains (such as `gift.sol`) resolve through the Solana Name
+  /// Service; a value that is already an address is returned unchanged.
   ///
-  /// [send] performs this resolution automatically, so calling it first is only necessary
-  /// when the app wants to show the resolved address. Throws [InvalidRecipient] if the name
-  /// is not registered.
+  /// [send] resolves automatically, so call this first only to show the resolved address.
+  /// Throws [InvalidRecipient] if the name is not registered.
   static Future<String> resolveName(String nameOrAddress) async {
     if (!_isName(nameOrAddress)) return nameOrAddress;
     return Xend.backend.resolveName(nameOrAddress);
   }
 
-  /// Swaps [amount] of [from] into [to], optionally bounding slippage with
-  /// [maxSlippage].
+  /// Swaps [amount] of [from] into [to], optionally bounding slippage with [maxSlippage].
   ///
-  /// Not yet available in this release; currently throws [NotImplementedYet].
+  /// Not yet available; throws [NotImplementedYet].
   Future<TxHandle> swap({
     required Asset from,
     required Asset to,
@@ -282,7 +274,7 @@ class XendWallet {
 
   /// Bridges [amount] of [asset] to [toAddress] on [toChain].
   ///
-  /// Not yet available in this release; currently throws [NotImplementedYet].
+  /// Not yet available; throws [NotImplementedYet].
   Future<TxHandle> bridge({
     required Asset asset,
     required BigInt amount,
@@ -295,9 +287,9 @@ class XendWallet {
   /// Signs an arbitrary [message] on-device behind biometric authentication and returns
   /// the 64-byte Ed25519 signature.
   ///
-  /// [reason] is shown to the user in the authentication prompt so they can confirm what
-  /// they are approving. Useful for wallet-based sign-in and message signing, where the
-  /// caller needs a signature without moving funds.
+  /// [reason] is shown in the authentication prompt so the user can confirm what they are
+  /// approving. Useful for wallet-based sign-in and message signing, where the caller
+  /// needs a signature without moving funds.
   ///
   /// Throws [UserCancelledAuth] if the biometric prompt is dismissed.
   Future<List<int>> sign(List<int> message, {required String reason}) async {
@@ -313,14 +305,12 @@ class XendWallet {
     }
   }
 
-  /// Returns a stream of [TxStatus] updates for the transaction identified by [handle],
-  /// reporting its progress truthfully as it advances from pending to confirmed to
-  /// finalized — a confirmed transaction is never reported as finalized. The stream emits
-  /// once per commitment change and completes when the transaction is finalized or fails,
-  /// or after [timeout] elapses.
+  /// Emits a [TxStatus] each time the transaction's commitment advances (processed →
+  /// confirmed → finalized) or it fails, once per change. Completes on finalized/failed or
+  /// after [timeout].
   ///
   /// This release polls the backend every [pollInterval]; a push-based (WebSocket) stream
-  /// is planned. Cancel the subscription to stop watching early — for example, once the
+  /// is planned. Cancel the subscription to stop watching early, for example once the
   /// commitment your app treats as success is reached.
   ///
   /// ```dart
@@ -343,7 +333,7 @@ class XendWallet {
       final status = _statusFromBackend(handle, raw);
 
       // Emit on the first observation and whenever the commitment advances, so a listener
-      // sees each transition once rather than a status on every poll.
+      // sees each transition once rather than a status per poll.
       if (!hasEmitted || status.commitment != lastEmitted || status.isFailed) {
         yield status;
         hasEmitted = true;
@@ -356,9 +346,9 @@ class XendWallet {
     }
   }
 
-  /// Returns up to [limit] past transactions, most recent first. Pass the [before] cursor
-  /// (an RFC3339 timestamp, such as the [TxRecord.createdAt] of the last row seen) to page
-  /// through older records.
+  /// Returns up to [limit] past transactions, most recent first. Pass [before] (an RFC3339
+  /// timestamp, such as the [TxRecord.createdAt] of the last row seen) to page through
+  /// older records.
   Future<List<TxRecord>> history({int limit = 20, String? before}) async {
     _requireSolana(chain, 'XendWallet.history');
     final raw =
@@ -372,16 +362,16 @@ class XendWallet {
     }
   }
 
-  /// Whether [value] looks like a name to resolve rather than a raw address. Solana `.sol`
-  /// domains end in `.sol`; base58 addresses never do.
+  /// Whether [value] looks like a name to resolve rather than a raw address. `.sol`
+  /// domains end in `.sol`; base58 addresses do not.
   static bool _isName(String value) => value.toLowerCase().endsWith('.sol');
 }
 
 /// Assembles a signed Solana transaction in wire format: the compact-u16 count of
 /// [signatures], each 64-byte signature in signer order, then the serialized [message].
-/// This is the exact byte layout the backend parses back before broadcasting. A sponsored
-/// transfer has two signatures (fee payer, then sender); an unsponsored one has a single
-/// sender signature.
+/// This is the byte layout the backend parses before broadcasting. A sponsored transfer
+/// has two signatures (fee payer, then sender); an unsponsored one has a single sender
+/// signature.
 Uint8List _assembleSignedTransaction(
     List<Uint8List> signatures, Uint8List message) {
   final builder = BytesBuilder();
@@ -393,9 +383,9 @@ Uint8List _assembleSignedTransaction(
   return builder.toBytes();
 }
 
-/// Writes [value] as a Solana compact-u16 (shortvec length): 7 bits per byte, little-endian,
-/// with the high bit marking continuation. Signature counts are tiny, but encoding it
-/// correctly keeps the wire format honest rather than assuming a single byte.
+/// Writes [value] as a Solana compact-u16 (shortvec length): 7 bits per byte,
+/// little-endian, with the high bit marking continuation. Signature counts are tiny, but
+/// encoding it correctly keeps the wire format valid rather than assuming a single byte.
 void _writeCompactU16(BytesBuilder builder, int value) {
   var remaining = value;
   while (true) {
@@ -410,7 +400,7 @@ void _writeCompactU16(BytesBuilder builder, int value) {
 }
 
 /// Generates a random 128-bit idempotency key as lowercase hex. A distinct key per call
-/// keeps sends independent, while a caller who wants retry safety can supply their own.
+/// keeps sends independent; a caller who wants retry safety can supply their own.
 String _newIdempotencyKey() {
   final random = Random.secure();
   final bytes = List<int>.generate(16, (_) => random.nextInt(256));
@@ -469,9 +459,9 @@ TxStatus _statusFromBackend(TxHandle handle, String raw) {
   }
 }
 
-/// Maps a native secure-element failure into a typed [XendError]. A cancelled biometric
-/// prompt is the case callers routinely branch on; other device failures surface as a
-/// retryable [NetworkError], since they mean the operation did not complete.
+/// Maps a native secure-element failure to a typed [XendError]. A cancelled biometric
+/// prompt is the case callers branch on; other device failures surface as a retryable
+/// [NetworkError], since they mean the operation did not complete.
 XendError _mapNativeError(PlatformException e) {
   switch (e.code) {
     case 'user_cancelled_auth':

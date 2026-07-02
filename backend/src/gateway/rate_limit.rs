@@ -1,6 +1,6 @@
-//! A fixed-window in-memory rate limiter and the middleware that enforces it. This suits a
-//! single instance; a horizontally-scaled deployment would back the counters with a shared
-//! store such as Redis.
+//! Fixed-window in-memory rate limiter and the middleware that enforces it. Suits a single
+//! instance; a horizontally-scaled deployment would back the counters with a shared store
+//! such as Redis.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,7 @@ use axum::response::Response;
 
 use crate::error::AppError;
 
-/// Counts requests per caller within a fixed window, allowing at most `max` per `window`.
+/// Counts requests per caller, allowing at most `max` per `window`.
 pub struct RateLimiter {
     max: u32,
     window: Duration,
@@ -33,8 +33,8 @@ impl RateLimiter {
         }
     }
 
-    /// Records a request for `caller`. Returns `Ok(())` when within the limit, or the
-    /// number of seconds to wait once the window is exhausted.
+    /// Records a request for `caller`. Returns `Ok(())` when within the limit, otherwise
+    /// `Err` with the number of seconds to wait until the window resets.
     fn record(&self, caller: &str) -> Result<(), u64> {
         let now = Instant::now();
         let mut windows = self.windows.lock().expect("rate limiter mutex poisoned");
@@ -55,8 +55,8 @@ impl RateLimiter {
     }
 }
 
-/// Middleware that rejects a caller exceeding the limit with `429 Too Many Requests`.
-/// Callers are keyed by their API key when present, otherwise a shared anonymous bucket.
+/// Rejects a caller over the limit with `429 Too Many Requests`. Callers are keyed by API
+/// key when present, otherwise a shared anonymous bucket.
 pub async fn enforce(
     State(limiter): State<Arc<RateLimiter>>,
     request: Request,

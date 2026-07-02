@@ -4,8 +4,8 @@ import 'package:http/http.dart' as http;
 
 import 'errors.dart';
 
-/// HTTP client for the Xend backend. Translates backend error codes into typed
-/// [XendError]s so callers can branch on the failure rather than parse strings.
+/// HTTP client for the Xend backend. Maps backend error codes to typed [XendError]s so
+/// callers can branch on the failure instead of parsing strings.
 class BackendClient {
   BackendClient({required this.baseUrl, this.apiKey, http.Client? client})
       : _client = client ?? http.Client();
@@ -33,10 +33,10 @@ class BackendClient {
 
   /// `POST /v1/tx/build` — request an unsigned transfer for the device to sign.
   ///
-  /// Returns the base64-encoded transaction [message] and the Unix second [validUntil]
+  /// Returns the base64-encoded transaction [message] and the Unix second [validUntil],
   /// after which it must be rebuilt rather than broadcast. [feePayerSignature] is present
-  /// only when the backend sponsors the fee (gasless): it is the fee payer's base64
-  /// signature over [message], which the device assembles ahead of its own.
+  /// only for sponsored (gasless) fees: it is the fee payer's base64 signature over
+  /// [message], which the device assembles ahead of its own.
   Future<({String message, int validUntil, String? feePayerSignature})>
       buildTransfer({
     required String from,
@@ -61,8 +61,8 @@ class BackendClient {
   ///
   /// [signed] is the base64-encoded, fully-signed transaction. [idempotencyKey] makes a
   /// retry safe: submitting the same key twice returns the original signature instead of
-  /// broadcasting again. The remaining fields are recorded for history. Returns the
-  /// on-chain [signature] and its recorded [status].
+  /// broadcasting again. Remaining fields are recorded for history. Returns the on-chain
+  /// [signature] and its recorded [status].
   Future<({String signature, String status})> submitTransaction({
     required String signed,
     required String idempotencyKey,
@@ -102,7 +102,7 @@ class BackendClient {
   }
 
   /// `GET /v1/wallets/:pubkey/transactions` — the wallet's transaction history, most
-  /// recent first. Each element is the raw record JSON; the caller maps it to a model.
+  /// recent first. Each element is raw record JSON for the caller to map to a model.
   Future<List<Map<String, dynamic>>> getHistory(
     String pubkey, {
     int limit = 20,

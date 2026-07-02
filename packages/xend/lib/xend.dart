@@ -1,8 +1,8 @@
-/// Xend — embedded, non-custodial payments for mobile apps.
+/// Xend: embedded, non-custodial payments for mobile apps.
 ///
-/// This library is the complete public surface of the SDK; any symbol not exported here
-/// is internal and may change without notice. Applications import only this file and
-/// need no blockchain or cryptography dependency of their own.
+/// This library is the SDK's complete public surface. Anything not exported here is
+/// internal and may change without notice. Apps import only this file and need no
+/// blockchain or cryptography dependency of their own.
 library xend;
 
 export 'src/config.dart' show Xend, XendConfig;

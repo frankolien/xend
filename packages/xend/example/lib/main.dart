@@ -2,12 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // Clipboard
 import 'package:xend/xend.dart';
 
-// This app imports ONLY package:xend (and Flutter). No solana, no crypto, no RPC, no
-// "blockhash" — the entire wallet is driven through the SDK surface. That is the
-// abstraction test (docs/00-PRD.md invariant 4): an app developer never touches a chain.
+// This app imports only package:xend and Flutter. No solana, crypto, RPC, or blockhash:
+// the whole wallet runs through the SDK. See docs/00-PRD.md invariant 4.
 
-/// The Xend backend. The iOS simulator reaches a backend on the host via localhost; a
-/// physical device must use the host machine's LAN IP (for example `http://192.168.1.20:8080`).
+/// Xend backend URL. The iOS simulator reaches the host via localhost; a physical device
+/// needs the host's LAN IP (for example `http://192.168.1.20:8080`).
 const String backendUrl = 'http://localhost:8080';
 
 void main() {
@@ -55,7 +54,7 @@ class _WalletScreenState extends State<WalletScreen> {
   @override
   void initState() {
     super.initState();
-    _loadExisting(); // the wallet must survive an app restart
+    _loadExisting(); // wallet must survive app restart
   }
 
   Future<void> _loadExisting() async {
@@ -68,9 +67,8 @@ class _WalletScreenState extends State<WalletScreen> {
   Future<void> _create() async {
     setState(() => _busy = true);
     try {
-      // Silent, embedded-style onboarding: the wallet is provisioned on-device with no
-      // recovery phrase shown. The phrase is available later under "Export recovery
-      // phrase" for users who want to self-custody or import elsewhere.
+      // Provision on-device without showing a recovery phrase. The phrase is available
+      // later under "Export recovery phrase" for self-custody or importing elsewhere.
       final wallet = await XendWallet.create(label: 'Main');
       if (!mounted) return;
       setState(() => _wallet = wallet);
@@ -438,8 +436,8 @@ class _AddressCard extends StatelessWidget {
   }
 }
 
-/// A modal sheet for composing and sending a transfer. Owns its own in-flight state and
-/// surfaces typed errors inline; on success it pops with the transaction signature.
+/// Modal sheet for composing and sending a transfer. Shows typed errors inline and pops
+/// with the transaction signature on success.
 class _SendSheet extends StatefulWidget {
   const _SendSheet({required this.wallet});
 
@@ -479,7 +477,7 @@ class _SendSheetState extends State<_SendSheet> {
       _error = null;
     });
     try {
-      // Approving here triggers Face ID; the key is unwrapped, used once, and zeroed.
+      // Triggers Face ID. The key is unwrapped, used once, then zeroed.
       final tx = await widget.wallet.send(to: to, amount: lamports);
       if (mounted) Navigator.pop(context, tx.id);
     } on UserCancelledAuth {
@@ -568,8 +566,8 @@ class _SendSheetState extends State<_SendSheet> {
   }
 }
 
-/// Shows a submitted transaction and tracks its confirmation live by listening to
-/// [XendWallet.watch] — Confirming… → Confirmed → Finalized.
+/// Shows a submitted transaction and tracks confirmation live via [XendWallet.watch]:
+/// Confirming, then Confirmed, then Finalized.
 class _SentDialog extends StatefulWidget {
   const _SentDialog({required this.wallet, required this.signature});
 
@@ -631,8 +629,7 @@ class _SentDialogState extends State<_SentDialog> {
   }
 }
 
-/// Renders a transaction's lifecycle state as an icon + label, with a spinner while it is
-/// still confirming.
+/// Shows a transaction's state as an icon and label, with a spinner while confirming.
 class _StatusRow extends StatelessWidget {
   const _StatusRow({required this.state});
 
@@ -675,7 +672,7 @@ class _StatusRow extends StatelessWidget {
   }
 }
 
-/// The wallet's recent transactions, or a placeholder while loading / when empty.
+/// Recent transactions, or a placeholder while loading or when empty.
 class _HistoryList extends StatelessWidget {
   const _HistoryList({required this.records});
 
@@ -705,7 +702,7 @@ class _HistoryList extends StatelessWidget {
   }
 }
 
-/// A single transaction row: amount sent, recipient, status, and how long ago.
+/// One transaction row: amount, recipient, status, and age.
 class _HistoryRow extends StatelessWidget {
   const _HistoryRow({required this.record});
 
@@ -733,8 +730,8 @@ class _HistoryRow extends StatelessWidget {
   }
 }
 
-/// Displays a recovery phrase for backup — the numbered words, a warning, and a copy
-/// action. Shown once after creation and again on demand via "Reveal recovery phrase".
+/// Shows a recovery phrase to back up: numbered words, a warning, and a copy action.
+/// Shown after creation and again on demand via "Reveal recovery phrase".
 class _PhraseDialog extends StatelessWidget {
   const _PhraseDialog({required this.phrase, required this.isReveal});
 
@@ -844,7 +841,7 @@ class _RestoreDialogState extends State<_RestoreDialog> {
   }
 }
 
-/// A rounded surface used for the balance and address cards.
+/// Rounded surface used by the balance and address cards.
 class _Card extends StatelessWidget {
   const _Card({required this.child});
 
@@ -870,7 +867,7 @@ class _Card extends StatelessWidget {
   }
 }
 
-/// A compact age label for a timestamp, such as `now`, `5m`, `3h`, or `2d`.
+/// Compact age label for a timestamp, such as `now`, `5m`, `3h`, or `2d`.
 String _shortAge(DateTime time) {
   final d = DateTime.now().difference(time);
   if (d.inMinutes < 1) return 'now';
@@ -885,7 +882,7 @@ String _short(String address) => address.length <= 12
     : '${address.substring(0, 6)}…${address.substring(address.length - 6)}';
 
 /// Formats a base-unit [amount] as a decimal string with [decimals] fractional digits,
-/// trimming trailing zeros (for example, 1_500_000_000 lamports → "1.5").
+/// trimming trailing zeros. For example 1_500_000_000 lamports becomes "1.5".
 String _formatUnits(BigInt amount, int decimals) {
   if (decimals == 0) return amount.toString();
   final padded = amount.toString().padLeft(decimals + 1, '0');

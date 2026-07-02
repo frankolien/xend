@@ -6,7 +6,7 @@ use sqlx::PgPool;
 
 use crate::chain::ChainAdapter;
 
-/// State shared across all routes: the database pool and the active chain adapter.
+/// State shared across all routes: the database pool and active chain adapter.
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,

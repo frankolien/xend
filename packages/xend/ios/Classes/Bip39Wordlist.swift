@@ -1,8 +1,8 @@
 // BIP-39 English wordlist (2048 words), the canonical list from BIP-0039.
 // SHA-256 of the source file: 2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda
 //
-// This list is a fixed part of the standard; the same 2048 words are used by every
-// BIP-39 wallet, so a phrase generated here restores in any of them (and vice versa).
+// Fixed by the standard: every BIP-39 wallet uses these same 2048 words, so phrases are
+// portable between them.
 
 enum Bip39Wordlist {
     /// The 2048 words, indexed 0...2047, matching an 11-bit index.

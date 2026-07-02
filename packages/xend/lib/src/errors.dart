@@ -1,7 +1,7 @@
-/// The base type for every recoverable failure surfaced by the Xend SDK.
+/// Base type for every recoverable failure from the Xend SDK.
 ///
-/// All fallible operations fail with a subtype of [XendError], so callers can handle
-/// each condition explicitly rather than inspecting error strings:
+/// Fallible operations throw a subtype of [XendError], so callers can handle each
+/// condition by type instead of inspecting error strings:
 ///
 /// ```dart
 /// try {
@@ -17,17 +17,17 @@
 sealed class XendError implements Exception {
   const XendError(this.message);
 
-  /// A human-readable description of the failure. Intended for logs and developers, not
-  /// for direct display to end users without localization.
+  /// Human-readable description of the failure, for logs and developers. Not for direct
+  /// display to end users without localization.
   final String message;
 
   @override
   String toString() => '$runtimeType: $message';
 }
 
-/// A transient failure while communicating with the Xend backend or network.
+/// A transient failure talking to the backend or network.
 ///
-/// Safe to retry. Operations are idempotent, so a retried request is not applied twice.
+/// Safe to retry: operations are idempotent, so a retried request is not applied twice.
 final class NetworkError extends XendError {
   const NetworkError([super.message = 'Network unavailable']);
 }
@@ -39,18 +39,17 @@ final class InsufficientFunds extends XendError {
   const InsufficientFunds([super.message = 'Insufficient funds']);
 }
 
-/// Biometric authentication was cancelled or interrupted before signing completed.
+/// Biometric authentication was cancelled or interrupted before signing.
 ///
-/// No transaction was signed or submitted and no funds moved. The operation may be
-/// retried.
+/// Nothing was signed or submitted and no funds moved. Safe to retry.
 final class UserCancelledAuth extends XendError {
   const UserCancelledAuth([super.message = 'Authentication cancelled']);
 }
 
 /// The transaction's validity window elapsed before it could be broadcast.
 ///
-/// Depending on the SDK's recovery policy, this may be handled automatically by
-/// rebuilding and re-signing the transaction.
+/// May be handled automatically by rebuilding and re-signing, depending on the SDK's
+/// recovery policy.
 final class BlockhashExpired extends XendError {
   const BlockhashExpired(
       [super.message = 'Transaction expired before broadcast']);
@@ -74,7 +73,7 @@ final class RateLimited extends XendError {
 
 /// The network rejected the transaction.
 ///
-/// Usually terminal for the submitted transaction. See [reason] for details.
+/// Usually terminal for the submitted transaction. See [reason].
 final class ChainRejected extends XendError {
   const ChainRejected(this.reason) : super('Chain rejected: $reason');
 
@@ -82,8 +81,8 @@ final class ChainRejected extends XendError {
   final String reason;
 }
 
-/// The supplied recovery phrase is not a valid BIP-39 mnemonic (wrong length, an unknown
-/// word, or a failed checksum).
+/// The recovery phrase is not a valid BIP-39 mnemonic: wrong length, unknown word, or
+/// failed checksum.
 ///
 /// Terminal: correct the phrase and try again.
 final class InvalidRecoveryPhrase extends XendError {
@@ -92,8 +91,8 @@ final class InvalidRecoveryPhrase extends XendError {
 
 /// The requested capability is not available in this release.
 ///
-/// The method's signature is stable, but its implementation is planned for a future
-/// version. Consult the package changelog for availability.
+/// The method signature is stable; the implementation is planned for a future version.
+/// See the package changelog for availability.
 final class NotImplementedYet extends XendError {
   const NotImplementedYet(String what)
       : super('$what is not available in this version');

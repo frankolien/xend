@@ -1,6 +1,6 @@
-//! API-key authentication middleware. Callers present `Authorization: Bearer <key>` and
-//! the key is checked against the configured set. When no keys are configured the service
-//! runs in development mode with authentication disabled.
+//! API-key authentication middleware. Callers present `Authorization: Bearer <key>`, checked
+//! against the configured set. With no keys configured, authentication is disabled
+//! (development mode).
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -11,8 +11,8 @@ use axum::response::Response;
 
 use crate::error::AppError;
 
-/// Decides whether a request bearing `auth_header` is authorized against `keys`. An empty
-/// key set means authentication is disabled (development mode) and everything is allowed.
+/// Whether `auth_header` is authorized against `keys`. An empty key set disables
+/// authentication (development mode) and allows everything.
 fn is_authorized(keys: &HashSet<String>, auth_header: Option<&str>) -> bool {
     if keys.is_empty() {
         return true;
@@ -23,7 +23,7 @@ fn is_authorized(keys: &HashSet<String>, auth_header: Option<&str>) -> bool {
     }
 }
 
-/// Middleware that rejects a request without a valid API key with `401 Unauthorized`.
+/// Rejects requests without a valid API key with `401 Unauthorized`.
 pub async fn require_api_key(
     State(keys): State<Arc<HashSet<String>>>,
     request: Request,

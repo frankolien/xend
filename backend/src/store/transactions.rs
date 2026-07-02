@@ -1,6 +1,6 @@
-//! Queries over the `transactions` ledger. The table records only public facts and is
-//! the mechanism behind idempotent submission: `idempotency_key` is UNIQUE, so a repeated
-//! submission finds the original row instead of broadcasting again.
+//! Queries over the `transactions` ledger. The table records only public facts. Idempotent
+//! submission relies on the UNIQUE `idempotency_key`: a repeated submission finds the
+//! original row instead of broadcasting again.
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -8,11 +8,11 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-/// The idempotency-relevant fields of a stored transaction.
+/// Idempotency-relevant fields of a stored transaction.
 pub struct Existing {
-    /// The on-chain signature, or `None` if the row was claimed but not yet broadcast.
+    /// On-chain signature, or `None` if the row was claimed but not yet broadcast.
     pub signature: Option<String>,
-    /// The recorded lifecycle state.
+    /// Lifecycle state.
     pub status: String,
 }
 
@@ -30,9 +30,9 @@ pub async fn find_by_idempotency(
 }
 
 /// Claims an idempotency key by inserting a pending row. The UNIQUE constraint plus
-/// `on conflict do nothing` means concurrent claims for the same key collapse to a single
-/// row; callers that lose the race still proceed safely, since re-broadcasting identical
-/// signed bytes yields the same on-chain signature.
+/// `on conflict do nothing` collapse concurrent claims for the same key to a single row.
+/// A caller that loses the race is still safe: re-broadcasting identical signed bytes
+/// yields the same on-chain signature.
 pub async fn insert_pending(
     pool: &PgPool,
     wallet_id: Option<Uuid>,
@@ -57,7 +57,7 @@ pub async fn insert_pending(
     Ok(())
 }
 
-/// A broadcast transaction as recorded in the ledger, for history.
+/// A broadcast transaction as recorded in the ledger, used for history.
 pub struct Record {
     pub signature: String,
     pub status: String,
@@ -67,9 +67,9 @@ pub struct Record {
     pub created_at: DateTime<Utc>,
 }
 
-/// Lists a wallet's broadcast transactions, most recent first, up to `limit`. When
-/// `before` is supplied, only transactions created strictly before it are returned, for
-/// cursor pagination. Rows not yet broadcast (no signature) are omitted.
+/// Lists a wallet's broadcast transactions, most recent first, up to `limit`. If `before`
+/// is set, returns only transactions created strictly before it (cursor pagination). Rows
+/// not yet broadcast (no signature) are omitted.
 pub async fn list_for_wallet(
     pool: &PgPool,
     wallet_id: Uuid,

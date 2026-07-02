@@ -1,8 +1,8 @@
 import 'package:flutter/services.dart'; // re-exports Uint8List
 
-/// The private bridge between Dart and the native signer, over the `ai.xend/secure`
-/// method channel. It passes wallet identifiers and byte payloads only, never key
-/// material. Internal to the SDK.
+/// Bridge between Dart and the native signer, over the `ai.xend/secure` method channel.
+/// Passes wallet identifiers and byte payloads only, never key material. Internal to the
+/// SDK.
 class SecureChannel {
   const SecureChannel();
 
@@ -40,10 +40,10 @@ class SecureChannel {
     return mnemonic!;
   }
 
-  /// Loads the wallet already on this device, or silently recovers one whose seed synced
-  /// in from another device via iCloud Keychain, rebuilding the local signing key. Returns
-  /// the base58 [address] and whether recovery had to run ([recovered]); returns null when
-  /// this is a genuinely new install with nothing to load.
+  /// Loads the wallet already on this device, or recovers one whose seed synced in from
+  /// another device via iCloud Keychain, rebuilding the local signing key. Returns the
+  /// base58 [address] and whether recovery ran ([recovered]); returns null on a new
+  /// install with nothing to load.
   Future<({String address, bool recovered})?> loadOrRecover(
       String walletId) async {
     final result = await _channel.invokeMapMethod<String, dynamic>(

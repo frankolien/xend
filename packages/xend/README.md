@@ -5,8 +5,6 @@ value — with every key generated and kept **on the device**, gated behind Face
 `Xend`; the SDK handles the chain, the signing, fee sponsorship, name resolution, and
 confirmation. No seed phrase to show, no raw web3 to touch.
 
-> **Status: v0.1 · pre-release.** Solana + iOS only, devnet. **Not audited — do not use with
-> real funds yet.** See the [roadmap](https://github.com/EntryPointLabs/xend/blob/main/docs/03-ROADMAP.md).
 
 ## Install
 
