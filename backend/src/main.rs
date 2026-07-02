@@ -18,6 +18,8 @@ mod store;
 use std::env;
 use std::sync::Arc;
 
+use solana_sdk::signature::{Keypair, Signer};
+
 use crate::chain::{ChainAdapter, SolanaAdapter};
 use crate::state::AppState;
 
@@ -32,8 +34,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rpc_url = env::var("SOLANA_RPC_URL")
         .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string());
 
+    // A configured paymaster turns on gasless transfers: it becomes the fee payer for every
+    // built transaction, so users transact holding no SOL. Absent one, senders pay their own
+    // fee. The secret is a base58 keypair string (as produced by `solana-keygen`).
+    let fee_payer = match env::var("XEND_PAYMASTER_SECRET") {
+        Ok(secret) => {
+            let keypair = Keypair::from_base58_string(secret.trim());
+            tracing::info!(paymaster = %keypair.pubkey(), "gasless enabled: sponsoring network fees");
+            Some(keypair)
+        }
+        Err(_) => {
+            tracing::info!(
+                "gasless disabled: set XEND_PAYMASTER_SECRET (a base58 keypair) and fund its \
+                 pubkey with devnet SOL to sponsor fees"
+            );
+            None
+        }
+    };
+
     let pool = db::connect(&db_url).await?;
-    let chain: Arc<dyn ChainAdapter> = Arc::new(SolanaAdapter::new(rpc_url));
+    let chain: Arc<dyn ChainAdapter> = Arc::new(SolanaAdapter::new(rpc_url, fee_payer));
     let state = AppState { pool, chain };
     let gateway = gateway::Gateway::from_env();
 

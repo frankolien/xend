@@ -34,6 +34,11 @@ pub struct BuildResponse {
     pub message: String,
     /// Unix timestamp (seconds) after which the transaction is no longer valid.
     pub valid_until: u64,
+    /// Base64-encoded fee-payer signature over `message`, present only when fees are
+    /// sponsored. The device assembles it ahead of its own signature into the wire
+    /// transaction; when absent, the sender pays their own fee and signs alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fee_payer_signature: Option<String>,
 }
 
 /// `POST /v1/tx/build` — assemble an unsigned transfer for the device to sign.
@@ -56,14 +61,23 @@ pub async fn build(
 
     let unsigned = state.chain.build_transfer(&intent).await?;
 
-    let message = base64::engine::general_purpose::STANDARD.encode(&unsigned.message);
+    let encoder = base64::engine::general_purpose::STANDARD;
+    let message = encoder.encode(&unsigned.message);
+    let fee_payer_signature = unsigned
+        .fee_payer_signature
+        .as_ref()
+        .map(|sig| encoder.encode(sig));
     let valid_until = unsigned
         .valid_until
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    Ok(Json(BuildResponse { message, valid_until }))
+    Ok(Json(BuildResponse {
+        message,
+        valid_until,
+        fee_payer_signature,
+    }))
 }
 
 #[derive(Deserialize)]

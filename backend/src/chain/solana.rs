@@ -10,6 +10,7 @@ use solana_sdk::hash::Hash;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk::transaction::Transaction;
 
 use super::adapter::{ChainAdapter, Commitment, TransferIntent, UnsignedTx};
@@ -17,16 +18,24 @@ use crate::error::AppError;
 
 /// The Solana implementation of [`ChainAdapter`]. It holds the RPC endpoint — the only
 /// component with RPC credentials — and an HTTP client for JSON-RPC calls.
+///
+/// When a `fee_payer` keypair is present, transfers are built with that account as the
+/// Solana fee payer and co-signed by it, so a user can transact holding no SOL (the
+/// "gasless" path). The fee payer only authorizes paying the network fee; the sender's own
+/// signature is still required to move their funds, so this never lets the backend spend on
+/// a user's behalf.
 pub struct SolanaAdapter {
     rpc_url: String,
     http: reqwest::Client,
+    fee_payer: Option<Keypair>,
 }
 
 impl SolanaAdapter {
-    pub fn new(rpc_url: impl Into<String>) -> Self {
+    pub fn new(rpc_url: impl Into<String>, fee_payer: Option<Keypair>) -> Self {
         Self {
             rpc_url: rpc_url.into(),
             http: reqwest::Client::new(),
+            fee_payer,
         }
     }
 
@@ -72,6 +81,15 @@ impl ChainAdapter for SolanaAdapter {
             .map_err(|_| AppError::BadRequest("invalid sender address".into()))?;
         let to = Pubkey::from_str(&intent.to).map_err(|_| AppError::InvalidRecipient)?;
 
+        // The fee payer is the paymaster when fees are sponsored, otherwise the sender. It
+        // pays the network fee and funds any account rent (a new associated token account),
+        // so a sponsored user needs no SOL at all.
+        let payer = self
+            .fee_payer
+            .as_ref()
+            .map(|k| k.pubkey())
+            .unwrap_or(from);
+
         // A native transfer is one System instruction; a token transfer is an idempotent
         // "create the recipient's associated token account" followed by a checked token
         // transfer between the two owners' associated accounts.
@@ -87,18 +105,29 @@ impl ChainAdapter for SolanaAdapter {
                 let source_ata = associated_token_address(&from, &mint);
                 let dest_ata = associated_token_address(&to, &mint);
                 vec![
-                    create_ata_idempotent(&from, &to, &mint, &dest_ata),
+                    // The fee payer funds the recipient's token account so token sends are
+                    // gasless too; the transfer itself is still authorized by `from`.
+                    create_ata_idempotent(&payer, &to, &mint, &dest_ata),
                     token_transfer_checked(&source_ata, &mint, &dest_ata, &from, amount, decimals),
                 ]
             }
         };
 
         let blockhash = self.latest_blockhash().await?;
-        let message = Message::new_with_blockhash(&instructions, Some(&from), &blockhash);
+        let message = Message::new_with_blockhash(&instructions, Some(&payer), &blockhash);
+        let message_bytes = message.serialize();
+
+        // Co-sign the fee-payer slot now, so the device only has to add its own signature.
+        // Both sign the identical message bytes; they are placed in signer order on assembly.
+        let fee_payer_signature = self
+            .fee_payer
+            .as_ref()
+            .map(|k| k.sign_message(&message_bytes).as_ref().to_vec());
 
         Ok(UnsignedTx {
-            message: message.serialize(),
+            message: message_bytes,
             valid_until: SystemTime::now() + Duration::from_secs(90),
+            fee_payer_signature,
         })
     }
 
@@ -456,6 +485,42 @@ mod tests {
             message_bytes,
             "message survives the wire round trip byte-for-byte"
         );
+    }
+
+    /// Pins the sponsored (gasless) wire contract: a fee payer at signer index 0 and the
+    /// sender at index 1, with the wire transaction `compact-u16(2) | fee_payer_sig |
+    /// sender_sig | message`. Both keys sign the identical message bytes; `Transaction::verify`
+    /// then checks each signature against its account, which passes only if the two
+    /// signatures are present, valid, and in signer order — exactly what the SDK must
+    /// assemble. Offline: real keys, no network.
+    #[test]
+    fn sponsored_wire_format_verifies_two_signatures() {
+        let fee_payer = Keypair::new();
+        let sender = Keypair::new();
+        let to = Pubkey::new_unique();
+
+        let instruction = system_transfer(&sender.pubkey(), &to, 1_000_000).unwrap();
+        // Fee payer is the message payer, so it occupies signer index 0 and the sender index 1.
+        let message =
+            Message::new_with_blockhash(&[instruction], Some(&fee_payer.pubkey()), &Hash::default());
+        let message_bytes = message.serialize();
+        assert_eq!(
+            message.header.num_required_signatures, 2,
+            "a sponsored transfer requires the fee payer and the sender to sign"
+        );
+
+        let fee_payer_sig = fee_payer.sign_message(&message_bytes);
+        let sender_sig = sender.sign_message(&message_bytes);
+
+        let mut wire = Vec::with_capacity(1 + 64 * 2 + message_bytes.len());
+        wire.push(2u8); // compact-u16 signature count
+        wire.extend_from_slice(fee_payer_sig.as_ref());
+        wire.extend_from_slice(sender_sig.as_ref());
+        wire.extend_from_slice(&message_bytes);
+
+        let tx: Transaction = bincode::deserialize(&wire).expect("wire transaction parses");
+        assert_eq!(tx.signatures.len(), 2);
+        tx.verify().expect("both signatures verify in signer order");
     }
 
     /// Pins [`associated_token_address`] against a real devnet vector: the associated

@@ -15,6 +15,10 @@ pub struct UnsignedTx {
     /// The instant after which the transaction is no longer valid (for example, when its
     /// blockhash expires). Past this point it must be rebuilt rather than broadcast.
     pub valid_until: SystemTime,
+    /// When fees are sponsored, the fee payer's signature over [`message`], already
+    /// produced by the backend. The device adds only its own signature; both are assembled
+    /// into the wire transaction in signer order. `None` when the sender pays their own fee.
+    pub fee_payer_signature: Option<Vec<u8>>,
 }
 
 /// A transaction's degree of finality on the network. The adapter reports the actual
