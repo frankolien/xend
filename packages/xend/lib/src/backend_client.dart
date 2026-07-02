@@ -37,7 +37,8 @@ class BackendClient {
   /// after which it must be rebuilt rather than broadcast. [feePayerSignature] is present
   /// only when the backend sponsors the fee (gasless): it is the fee payer's base64
   /// signature over [message], which the device assembles ahead of its own.
-  Future<({String message, int validUntil, String? feePayerSignature})> buildTransfer({
+  Future<({String message, int validUntil, String? feePayerSignature})>
+      buildTransfer({
     required String from,
     required String to,
     required BigInt amount,
@@ -88,7 +89,8 @@ class BackendClient {
   ///
   /// Throws [InvalidRecipient] if the name is malformed or not registered.
   Future<String> resolveName(String name) async {
-    final body = await _get('/v1/resolve?name=${Uri.encodeQueryComponent(name)}');
+    final body =
+        await _get('/v1/resolve?name=${Uri.encodeQueryComponent(name)}');
     return body['address'] as String;
   }
 
@@ -142,7 +144,8 @@ class BackendClient {
     return decoded;
   }
 
-  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> json) async {
+  Future<Map<String, dynamic>> _post(
+      String path, Map<String, dynamic> json) async {
     final http.Response resp;
     try {
       resp = await _client.post(

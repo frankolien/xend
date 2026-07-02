@@ -1,15 +1,30 @@
 # Changelog
 
-## 0.1.0 (unreleased) — Phase 1 · Foundation
+## 0.1.0
 
-- On-device wallet creation: Ed25519 keypair generated in the native iOS vault
-  (Secure Enclave-protected Keychain); base58 Solana address returned to Dart.
-- `Xend.configure` / `XendConfig` entry point.
-- `XendWallet.create` / `load` / `delete`, `receive`, and `address`.
-- Chain-agnostic public API (`Chain`, `Asset`, `Balance`, `TxHandle`, `TxStatus`, …) with a
-  Solana-only implementation behind a chain-adapter seam.
+First public pre-release. **Solana + iOS, devnet. Not audited — do not use with real funds.**
+
+### Wallet
+- Embedded, silent onboarding: `XendWallet.create` generates an Ed25519 key on-device
+  (BIP-39 / SLIP-0010), wrapped by a Secure Enclave key — no seed phrase shown.
+- `XendWallet.load` returns the on-device wallet, or silently recovers it on a new device
+  from an end-to-end-encrypted iCloud Keychain seed.
+- `XendWallet.restore` from a recovery phrase; `revealRecoveryPhrase` for an optional export.
+- `delete`, `receive`, and `address`.
+
+### Payments
+- `send` — build → Face ID signature → submit, on Solana devnet. Native SOL and any SPL
+  token (the recipient's token account is created automatically).
+- Gasless: when the backend runs a paymaster it co-signs as fee payer, so users transact
+  holding no SOL — the same `send()` call.
+- `.sol` name resolution: `send(to: 'gift.sol', ...)` and `XendWallet.resolveName`.
+- `balance` (SOL or SPL), `history`, and `watch` (pending → confirmed → finalized).
+- `sign` arbitrary messages for wallet-based login.
+
+### Foundation
+- `Xend.configure` / `XendConfig` (backend URL + optional API key).
+- Chain-agnostic API (`Chain`, `Asset`, `Balance`, `TxHandle`, `TxStatus`, `TxRecord`).
 - Sealed `XendError` hierarchy for exhaustive failure handling.
-- Backend client for wallet registration (`POST /v1/wallets`).
+- Keys never cross the platform channel; the backend is a witness, never a custodian.
 
-Not yet implemented (throw `NotImplementedYet`): `send`, `balance`, `sign`, `watch`, `history`,
-`restore`, `swap`, `bridge`. See the roadmap for the phase they land in.
+Not yet implemented (throw `NotImplementedYet`): `swap`, `bridge`, and non-Solana chains.

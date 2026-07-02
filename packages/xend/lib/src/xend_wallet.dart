@@ -361,7 +361,8 @@ class XendWallet {
   /// through older records.
   Future<List<TxRecord>> history({int limit = 20, String? before}) async {
     _requireSolana(chain, 'XendWallet.history');
-    final raw = await Xend.backend.getHistory(address, limit: limit, before: before);
+    final raw =
+        await Xend.backend.getHistory(address, limit: limit, before: before);
     return raw.map((json) => _txRecordFromJson(json, chain)).toList();
   }
 
@@ -381,7 +382,8 @@ class XendWallet {
 /// This is the exact byte layout the backend parses back before broadcasting. A sponsored
 /// transfer has two signatures (fee payer, then sender); an unsponsored one has a single
 /// sender signature.
-Uint8List _assembleSignedTransaction(List<Uint8List> signatures, Uint8List message) {
+Uint8List _assembleSignedTransaction(
+    List<Uint8List> signatures, Uint8List message) {
   final builder = BytesBuilder();
   _writeCompactU16(builder, signatures.length);
   for (final signature in signatures) {
@@ -477,7 +479,8 @@ XendError _mapNativeError(PlatformException e) {
     case 'invalid_mnemonic':
       return const InvalidRecoveryPhrase();
     case 'biometrics_unavailable':
-      return const NetworkError('Biometric authentication is unavailable on this device');
+      return const NetworkError(
+          'Biometric authentication is unavailable on this device');
     default:
       return NetworkError('secure element error: ${e.message ?? e.code}');
   }

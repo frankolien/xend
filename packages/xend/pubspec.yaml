@@ -1,12 +1,17 @@
 name: xend
 description: >-
-  Embedded, non-custodial payments for mobile apps. Keys never leave the device.
-  Chain-agnostic API; Solana implementation in v0.1.
+  Embedded, non-custodial crypto payments for mobile apps: on-device Face ID signing,
+  gasless fees, and .sol names behind a one-line send(). Solana + iOS in v0.1.
 version: 0.1.0
-publish_to: none # remove to publish to pub.dev (kept while pre-1.0)
 homepage: https://github.com/EntryPointLabs/xend
 repository: https://github.com/EntryPointLabs/xend
 issue_tracker: https://github.com/EntryPointLabs/xend/issues
+topics:
+  - solana
+  - payments
+  - wallet
+  - web3
+  - crypto
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

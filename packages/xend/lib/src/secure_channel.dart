@@ -10,7 +10,8 @@ class SecureChannel {
 
   /// Generates a new key pair and its recovery phrase on-device. Returns the base58
   /// [address] and the BIP-39 [mnemonic] (shown once for the user to back up).
-  Future<({String address, String mnemonic})> generateKeyPair(String walletId) async {
+  Future<({String address, String mnemonic})> generateKeyPair(
+      String walletId) async {
     final result = await _channel.invokeMapMethod<String, dynamic>(
       'generateKeyPair',
       {'walletId': walletId},
@@ -43,7 +44,8 @@ class SecureChannel {
   /// in from another device via iCloud Keychain, rebuilding the local signing key. Returns
   /// the base58 [address] and whether recovery had to run ([recovered]); returns null when
   /// this is a genuinely new install with nothing to load.
-  Future<({String address, bool recovered})?> loadOrRecover(String walletId) async {
+  Future<({String address, bool recovered})?> loadOrRecover(
+      String walletId) async {
     final result = await _channel.invokeMapMethod<String, dynamic>(
       'loadOrRecover',
       {'walletId': walletId},
@@ -55,7 +57,8 @@ class SecureChannel {
     );
   }
 
-  Future<Uint8List> signMessage(String walletId, Uint8List bytes, String reason) async {
+  Future<Uint8List> signMessage(
+      String walletId, Uint8List bytes, String reason) async {
     final sig = await _channel.invokeMethod<Uint8List>('signMessage', {
       'walletId': walletId,
       'bytes': bytes,

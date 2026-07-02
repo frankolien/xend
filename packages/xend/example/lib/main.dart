@@ -148,7 +148,8 @@ class _WalletScreenState extends State<WalletScreen> {
   }
 
   /// Refreshes balance and history together (after create, load, and each send).
-  Future<void> _refresh() => Future.wait([_refreshBalance(), _refreshHistory()]);
+  Future<void> _refresh() =>
+      Future.wait([_refreshBalance(), _refreshHistory()]);
 
   Future<void> _copyAddress() async {
     final wallet = _wallet;
@@ -187,8 +188,14 @@ class _WalletScreenState extends State<WalletScreen> {
           'wallet cannot be recovered.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
         ],
       ),
     );
@@ -203,7 +210,9 @@ class _WalletScreenState extends State<WalletScreen> {
 
   void _toast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -222,7 +231,10 @@ class _WalletScreenState extends State<WalletScreen> {
                 if (value == 'delete') _delete();
               },
               itemBuilder: (_) => const [
-                PopupMenuItem(value: 'reveal', child: Text('Export recovery phrase')),
+                PopupMenuItem(
+                  value: 'reveal',
+                  child: Text('Export recovery phrase'),
+                ),
                 PopupMenuItem(value: 'delete', child: Text('Delete wallet')),
               ],
             ),
@@ -253,12 +265,17 @@ class _WalletScreenState extends State<WalletScreen> {
         const SizedBox(height: 24),
         Row(
           children: [
-            const Text('Recent activity',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            const Text(
+              'Recent activity',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
             const Spacer(),
             if (_loadingHistory)
               const SizedBox(
-                  width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
           ],
         ),
         const SizedBox(height: 8),
@@ -269,7 +286,10 @@ class _WalletScreenState extends State<WalletScreen> {
           icon: const Icon(Icons.arrow_upward),
           style: FilledButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 16),
-            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            textStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           label: const Text('Send'),
         ),
@@ -279,7 +299,11 @@ class _WalletScreenState extends State<WalletScreen> {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.busy, required this.onCreate, required this.onRestore});
+  const _EmptyState({
+    required this.busy,
+    required this.onCreate,
+    required this.onRestore,
+  });
 
   final bool busy;
   final VoidCallback onCreate;
@@ -293,7 +317,10 @@ class _EmptyState extends StatelessWidget {
         children: [
           const Icon(Icons.shield_outlined, size: 56, color: Color(0xFF14C7C7)),
           const SizedBox(height: 16),
-          const Text('No wallet yet', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+          const Text(
+            'No wallet yet',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+          ),
           const SizedBox(height: 8),
           const Text(
             'A key pair is generated in the Secure Enclave and never leaves this device.',
@@ -344,11 +371,20 @@ class _BalanceCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.baseline,
                   textBaseline: TextBaseline.alphabetic,
                   children: [
-                    Text(amount, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w700)),
+                    Text(
+                      amount,
+                      style: const TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                     const SizedBox(width: 6),
                     const Padding(
                       padding: EdgeInsets.only(bottom: 4),
-                      child: Text('SOL', style: TextStyle(fontSize: 16, color: Colors.grey)),
+                      child: Text(
+                        'SOL',
+                        style: TextStyle(fontSize: 16, color: Colors.grey),
+                      ),
                     ),
                   ],
                 ),
@@ -359,7 +395,10 @@ class _BalanceCard extends StatelessWidget {
             onPressed: loading ? null : onRefresh,
             icon: loading
                 ? const SizedBox(
-                    width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Icon(Icons.refresh),
           ),
         ],
@@ -448,7 +487,9 @@ class _SendSheetState extends State<_SendSheet> {
     } on InsufficientFunds {
       if (mounted) setState(() => _error = 'Insufficient funds');
     } on InvalidRecipient {
-      if (mounted) setState(() => _error = 'That address is not valid on Solana');
+      if (mounted) {
+        setState(() => _error = 'Not a valid address or .sol name');
+      }
     } on XendError catch (e) {
       if (mounted) setState(() => _error = e.message);
     } finally {
@@ -465,7 +506,10 @@ class _SendSheetState extends State<_SendSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Send SOL', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+          const Text(
+            'Send SOL',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 16),
           TextField(
             controller: _toController,
@@ -489,19 +533,28 @@ class _SendSheetState extends State<_SendSheet> {
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),
-            Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ],
           const SizedBox(height: 20),
           FilledButton(
             onPressed: _sending ? null : _send,
-            style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
             child: _sending
                 ? const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       SizedBox(
-                        width: 18, height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       ),
                       SizedBox(width: 12),
                       Text('Approve with Face ID…'),
@@ -528,8 +581,9 @@ class _SentDialog extends StatefulWidget {
 }
 
 class _SentDialogState extends State<_SentDialog> {
-  late final Stream<TxStatus> _statuses =
-      widget.wallet.watch(TxHandle(widget.signature));
+  late final Stream<TxStatus> _statuses = widget.wallet.watch(
+    TxHandle(widget.signature),
+  );
 
   String get _explorerUrl =>
       'https://explorer.solana.com/tx/${widget.signature}?cluster=devnet';
@@ -544,7 +598,8 @@ class _SentDialogState extends State<_SentDialog> {
         children: [
           StreamBuilder<TxStatus>(
             stream: _statuses,
-            builder: (context, snapshot) => _StatusRow(state: snapshot.data?.state ?? 'pending'),
+            builder: (context, snapshot) =>
+                _StatusRow(state: snapshot.data?.state ?? 'pending'),
           ),
           const SizedBox(height: 16),
           const Text('Transaction', style: TextStyle(color: Colors.grey)),
@@ -560,13 +615,17 @@ class _SentDialogState extends State<_SentDialog> {
           onPressed: () async {
             await Clipboard.setData(ClipboardData(text: _explorerUrl));
             if (context.mounted) {
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(const SnackBar(content: Text('Link copied')));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Link copied')));
             }
           },
           child: const Text('Copy link'),
         ),
-        FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
       ],
     );
   }
@@ -603,7 +662,10 @@ class _StatusRow extends StatelessWidget {
       children: [
         if (icon == null)
           const SizedBox(
-              width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
         else
           Icon(icon, size: 20, color: color),
         const SizedBox(width: 10),
@@ -623,11 +685,16 @@ class _HistoryList extends StatelessWidget {
   Widget build(BuildContext context) {
     final records = this.records;
     if (records == null) {
-      return const Center(child: Text('—', style: TextStyle(color: Colors.grey)));
+      return const Center(
+        child: Text('—', style: TextStyle(color: Colors.grey)),
+      );
     }
     if (records.isEmpty) {
       return const Center(
-        child: Text('No transactions yet', style: TextStyle(color: Colors.grey)),
+        child: Text(
+          'No transactions yet',
+          style: TextStyle(color: Colors.grey),
+        ),
       );
     }
     return ListView.separated(
@@ -649,7 +716,10 @@ class _HistoryRow extends StatelessWidget {
     final amount = _formatUnits(record.amount, record.asset.decimals);
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      leading: const CircleAvatar(radius: 18, child: Icon(Icons.arrow_upward, size: 18)),
+      leading: const CircleAvatar(
+        radius: 18,
+        child: Icon(Icons.arrow_upward, size: 18),
+      ),
       title: Text('Sent $amount SOL'),
       subtitle: Text(
         'To ${_short(record.to)}  ·  ${record.status}',
@@ -692,13 +762,18 @@ class _PhraseDialog extends StatelessWidget {
             children: [
               for (var i = 0; i < words.length; i++)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF0F4F4),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text('${i + 1}. ${words[i]}',
-                      style: const TextStyle(fontFamily: 'Menlo', fontSize: 13)),
+                  child: Text(
+                    '${i + 1}. ${words[i]}',
+                    style: const TextStyle(fontFamily: 'Menlo', fontSize: 13),
+                  ),
                 ),
             ],
           ),
@@ -709,8 +784,9 @@ class _PhraseDialog extends StatelessWidget {
           onPressed: () async {
             await Clipboard.setData(ClipboardData(text: phrase));
             if (context.mounted) {
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(const SnackBar(content: Text('Recovery phrase copied')));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Recovery phrase copied')),
+              );
             }
           },
           child: const Text('Copy'),
@@ -755,7 +831,10 @@ class _RestoreDialogState extends State<_RestoreDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
         FilledButton(
           onPressed: () => Navigator.pop(context, _controller.text.trim()),
           child: const Text('Restore'),
@@ -779,7 +858,11 @@ class _Card extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: const [
-          BoxShadow(color: Color(0x0F000000), blurRadius: 12, offset: Offset(0, 4)),
+          BoxShadow(
+            color: Color(0x0F000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
         ],
       ),
       child: child,
@@ -797,8 +880,9 @@ String _shortAge(DateTime time) {
 }
 
 /// Shortens an address to `head…tail` for compact display.
-String _short(String address) =>
-    address.length <= 12 ? address : '${address.substring(0, 6)}…${address.substring(address.length - 6)}';
+String _short(String address) => address.length <= 12
+    ? address
+    : '${address.substring(0, 6)}…${address.substring(address.length - 6)}';
 
 /// Formats a base-unit [amount] as a decimal string with [decimals] fractional digits,
 /// trimming trailing zeros (for example, 1_500_000_000 lamports → "1.5").
@@ -806,7 +890,9 @@ String _formatUnits(BigInt amount, int decimals) {
   if (decimals == 0) return amount.toString();
   final padded = amount.toString().padLeft(decimals + 1, '0');
   final whole = padded.substring(0, padded.length - decimals);
-  final frac = padded.substring(padded.length - decimals).replaceAll(RegExp(r'0+$'), '');
+  final frac = padded
+      .substring(padded.length - decimals)
+      .replaceAll(RegExp(r'0+$'), '');
   return frac.isEmpty ? whole : '$whole.$frac';
 }
 
@@ -819,11 +905,13 @@ BigInt? _parseUnits(String input, int decimals) {
   if (parts.length > 2) return null;
   final whole = parts[0].isEmpty ? '0' : parts[0];
   var frac = parts.length == 2 ? parts[1] : '';
-  if (!RegExp(r'^\d+$').hasMatch(whole) || (frac.isNotEmpty && !RegExp(r'^\d+$').hasMatch(frac))) {
+  if (!RegExp(r'^\d+$').hasMatch(whole) ||
+      (frac.isNotEmpty && !RegExp(r'^\d+$').hasMatch(frac))) {
     return null;
   }
   if (frac.length > decimals) return null;
   frac = frac.padRight(decimals, '0');
   final scale = BigInt.from(10).pow(decimals);
-  return BigInt.parse(whole) * scale + (frac.isEmpty ? BigInt.zero : BigInt.parse(frac));
+  return BigInt.parse(whole) * scale +
+      (frac.isEmpty ? BigInt.zero : BigInt.parse(frac));
 }

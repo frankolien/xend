@@ -43,9 +43,11 @@ class Xend {
   ///
   /// Throws a [StateError] if [configure] has not been called.
   static XendConfig get config =>
-      _config ?? (throw StateError('Xend.configure() must be called before use.'));
+      _config ??
+      (throw StateError('Xend.configure() must be called before use.'));
 
   /// The shared backend client. Intended for internal use within the SDK.
   static BackendClient get backend =>
-      _backend ?? (throw StateError('Xend.configure() must be called before use.'));
+      _backend ??
+      (throw StateError('Xend.configure() must be called before use.'));
 }

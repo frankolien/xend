@@ -52,7 +52,8 @@ final class UserCancelledAuth extends XendError {
 /// Depending on the SDK's recovery policy, this may be handled automatically by
 /// rebuilding and re-signing the transaction.
 final class BlockhashExpired extends XendError {
-  const BlockhashExpired([super.message = 'Transaction expired before broadcast']);
+  const BlockhashExpired(
+      [super.message = 'Transaction expired before broadcast']);
 }
 
 /// The recipient address is not valid for the target chain.
