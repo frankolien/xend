@@ -7,11 +7,20 @@ import 'errors.dart';
 /// HTTP client for the Xend backend. Translates backend error codes into typed
 /// [XendError]s so callers can branch on the failure rather than parse strings.
 class BackendClient {
-  BackendClient({required this.baseUrl, http.Client? client})
+  BackendClient({required this.baseUrl, this.apiKey, http.Client? client})
       : _client = client ?? http.Client();
 
   final String baseUrl;
+
+  /// Optional API key sent as `Authorization: Bearer <key>` on every request.
+  final String? apiKey;
+
   final http.Client _client;
+
+  Map<String, String> get _headers => {
+        'content-type': 'application/json',
+        if (apiKey != null) 'authorization': 'Bearer $apiKey',
+      };
 
   /// `POST /v1/wallets` — register a public key; returns the backend wallet id.
   Future<String> registerWallet(String pubkey, {String? label}) async {
@@ -108,7 +117,7 @@ class BackendClient {
     try {
       resp = await _client.get(
         Uri.parse('$baseUrl$path'),
-        headers: const {'content-type': 'application/json'},
+        headers: _headers,
       );
     } on Exception {
       throw const NetworkError();
@@ -127,7 +136,7 @@ class BackendClient {
     try {
       resp = await _client.post(
         Uri.parse('$baseUrl$path'),
-        headers: const {'content-type': 'application/json'},
+        headers: _headers,
         body: jsonEncode(json),
       );
     } on Exception {

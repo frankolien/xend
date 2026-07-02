@@ -6,10 +6,15 @@ import 'backend_client.dart';
 /// before creating or loading a wallet.
 class XendConfig {
   /// Creates a configuration targeting the Xend backend at [backendUrl].
-  const XendConfig({required this.backendUrl});
+  const XendConfig({required this.backendUrl, this.apiKey});
 
   /// The base URL of the Xend backend, without a trailing slash.
   final String backendUrl;
+
+  /// Optional API key, sent as `Authorization: Bearer <key>` on every request. Required
+  /// when the backend has authentication enabled; may be omitted against a development
+  /// backend that runs with authentication disabled.
+  final String? apiKey;
 }
 
 /// The entry point to the Xend SDK.
@@ -31,7 +36,7 @@ class Xend {
   /// Initializes the SDK with [config]. Must be called before any other Xend API.
   static void configure(XendConfig config) {
     _config = config;
-    _backend = BackendClient(baseUrl: config.backendUrl);
+    _backend = BackendClient(baseUrl: config.backendUrl, apiKey: config.apiKey);
   }
 
   /// The active configuration.
