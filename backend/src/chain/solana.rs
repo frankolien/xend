@@ -26,14 +26,23 @@ use crate::error::AppError;
 /// a user's behalf.
 pub struct SolanaAdapter {
     rpc_url: String,
+    /// RPC used only for Solana Name Service lookups. `.sol` domains live on mainnet, so
+    /// this defaults there even when transfers settle on another cluster: a name resolves
+    /// to a real pubkey, which is a valid recipient on whichever cluster `rpc_url` targets.
+    sns_rpc_url: String,
     http: reqwest::Client,
     fee_payer: Option<Keypair>,
 }
 
 impl SolanaAdapter {
-    pub fn new(rpc_url: impl Into<String>, fee_payer: Option<Keypair>) -> Self {
+    pub fn new(
+        rpc_url: impl Into<String>,
+        sns_rpc_url: impl Into<String>,
+        fee_payer: Option<Keypair>,
+    ) -> Self {
         Self {
             rpc_url: rpc_url.into(),
+            sns_rpc_url: sns_rpc_url.into(),
             http: reqwest::Client::new(),
             fee_payer,
         }
@@ -129,6 +138,19 @@ impl ChainAdapter for SolanaAdapter {
             valid_until: SystemTime::now() + Duration::from_secs(90),
             fee_payer_signature,
         })
+    }
+
+    async fn resolve_name(&self, name: &str) -> Result<String, AppError> {
+        // v0.1 resolves a single-label `.sol` domain to its owner. Subdomains (`a.b.sol`)
+        // and custom SOL records are recognized enhancements left for a later pass.
+        let label = name
+            .strip_suffix(".sol")
+            .filter(|l| !l.is_empty() && !l.contains('.'))
+            .ok_or(AppError::InvalidRecipient)?;
+
+        let domain_key = sol_domain_key(label);
+        let owner = self.sns_domain_owner(&domain_key).await?;
+        Ok(owner.to_string())
     }
 
     async fn validate_signed(&self, signed: &[u8]) -> Result<(), AppError> {
@@ -337,6 +359,52 @@ impl SolanaAdapter {
         })?;
         u8::try_from(decimals).map_err(|_| AppError::Network("invalid mint decimals".into()))
     }
+
+    /// Reads the owner of a Name Service domain account (its registered address) from the
+    /// SNS RPC. The account's data begins with a fixed header — parent (32), owner (32),
+    /// class (32) — so the owner is the second 32-byte field. A missing account means the
+    /// name is not registered.
+    async fn sns_domain_owner(&self, domain: &Pubkey) -> Result<Pubkey, AppError> {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [domain.to_string(), { "encoding": "base64", "commitment": "confirmed" }],
+        });
+
+        let response = self
+            .http
+            .post(&self.sns_rpc_url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Network(format!("sns rpc request failed: {e}")))?;
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AppError::Network(format!("sns rpc decode failed: {e}")))?;
+
+        let value = &body["result"]["value"];
+        if value.is_null() {
+            // No such account: the name has not been registered.
+            return Err(AppError::InvalidRecipient);
+        }
+
+        let encoded = value["data"][0]
+            .as_str()
+            .ok_or_else(|| AppError::Network("sns account has no data".into()))?;
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| AppError::Network("sns account data is not base64".into()))?;
+
+        // parent (32) + owner (32) + class (32) header must be present.
+        let owner: [u8; 32] = data
+            .get(32..64)
+            .and_then(|s| s.try_into().ok())
+            .ok_or_else(|| AppError::Network("sns account data is too short".into()))?;
+        Ok(Pubkey::new_from_array(owner))
+    }
 }
 
 /// SPL Token program.
@@ -347,8 +415,32 @@ const ASSOCIATED_TOKEN_PROGRAM_ID: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNs
 /// System program.
 const SYSTEM_PROGRAM_ID: &str = "11111111111111111111111111111111";
 
+/// SPL Name Service program, which owns every `.sol` domain account.
+const NAME_PROGRAM_ID: &str = "namesLPneVptA9Z5rqUDD9tMTWEJwofgaYwp8cawRkX";
+/// The `.sol` top-level-domain account; every `.sol` domain is derived under it.
+const SOL_TLD_AUTHORITY: &str = "58PwtjSDuFHuUkYjH9BYnnQKHfwo9reZhC2zMJv9JPkx";
+/// Domain hashing prefix, prepended to a label before SHA-256 to form the seed.
+const SNS_HASH_PREFIX: &str = "SPL Name Service";
+
 fn program(id: &str) -> Pubkey {
     Pubkey::from_str(id).expect("valid built-in program id")
+}
+
+/// Derives the Name Service account for a single `.sol` label — the program address of
+/// `[sha256("SPL Name Service" + label), default_class, sol_tld]` under the Name Service
+/// program. The hashing and derivation are the same ones every SNS client uses, so this
+/// yields the exact account a domain resolves to.
+fn sol_domain_key(label: &str) -> Pubkey {
+    let hashed = solana_sdk::hash::hashv(&[SNS_HASH_PREFIX.as_bytes(), label.as_bytes()]);
+    let (key, _bump) = Pubkey::find_program_address(
+        &[
+            hashed.as_ref(),
+            Pubkey::default().as_ref(),
+            program(SOL_TLD_AUTHORITY).as_ref(),
+        ],
+        &program(NAME_PROGRAM_ID),
+    );
+    key
 }
 
 /// A System Program transfer of `amount` lamports from `from` (writable signer) to `to`
@@ -521,6 +613,17 @@ mod tests {
         let tx: Transaction = bincode::deserialize(&wire).expect("wire transaction parses");
         assert_eq!(tx.signatures.len(), 2);
         tx.verify().expect("both signatures verify in signer order");
+    }
+
+    /// Pins [`sol_domain_key`] against the published on-chain account for `bonfida.sol`.
+    /// The derivation must reproduce the exact Name Service account a domain lives at, or
+    /// resolution would read the wrong account (or none). This is the same account every
+    /// SNS client derives, so a match confirms the hashing, seeds, and program id are right.
+    #[test]
+    fn sol_domain_key_matches_published_account() {
+        let expected =
+            Pubkey::from_str("Crf8hzfthWGbGbLTVCiqRqV5MVnbpHB1L9KQMd6gsinb").unwrap();
+        assert_eq!(sol_domain_key("bonfida"), expected);
     }
 
     /// Pins [`associated_token_address`] against a real devnet vector: the associated

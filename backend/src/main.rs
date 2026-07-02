@@ -33,6 +33,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "postgres://xend:xend@localhost:5432/xend".to_string());
     let rpc_url = env::var("SOLANA_RPC_URL")
         .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string());
+    // `.sol` domains live on mainnet, so name resolution defaults there regardless of which
+    // cluster transfers settle on. A resolved name is just a pubkey, valid on any cluster.
+    let sns_rpc_url = env::var("SNS_RPC_URL")
+        .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
 
     // A configured paymaster turns on gasless transfers: it becomes the fee payer for every
     // built transaction, so users transact holding no SOL. Absent one, senders pay their own
@@ -53,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let pool = db::connect(&db_url).await?;
-    let chain: Arc<dyn ChainAdapter> = Arc::new(SolanaAdapter::new(rpc_url, fee_payer));
+    let chain: Arc<dyn ChainAdapter> = Arc::new(SolanaAdapter::new(rpc_url, sns_rpc_url, fee_payer));
     let state = AppState { pool, chain };
     let gateway = gateway::Gateway::from_env();
 

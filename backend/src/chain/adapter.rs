@@ -57,6 +57,11 @@ pub trait ChainAdapter: Send + Sync {
     /// Assembles an unsigned transfer for the given intent.
     async fn build_transfer(&self, intent: &TransferIntent) -> Result<UnsignedTx, AppError>;
 
+    /// Resolves a chain-native human-readable name (such as a Solana `.sol` domain) to an
+    /// address. Returns [`AppError::InvalidRecipient`] when the name is malformed or not
+    /// registered.
+    async fn resolve_name(&self, name: &str) -> Result<String, AppError>;
+
     /// Validates a signed payload before broadcast: well-formed, signature present, and
     /// consistent with the intent it was built from.
     async fn validate_signed(&self, signed: &[u8]) -> Result<(), AppError>;

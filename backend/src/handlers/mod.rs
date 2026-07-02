@@ -3,5 +3,6 @@
 //! and shapes the response. Handlers hold no SQL and no chain-specific logic.
 
 pub mod health;
+pub mod resolve;
 pub mod tx;
 pub mod wallet;

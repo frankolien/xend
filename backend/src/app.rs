@@ -9,7 +9,7 @@ use axum::{
 };
 
 use crate::gateway::{self, auth, rate_limit, request_id};
-use crate::handlers::{health, tx, wallet};
+use crate::handlers::{health, resolve, tx, wallet};
 use crate::state::AppState;
 
 /// Builds the application router with all routes, shared state, and gateway middleware.
@@ -22,6 +22,7 @@ pub fn router(state: AppState, gw: gateway::Gateway) -> Router {
         .route("/tx/build", post(tx::build))
         .route("/tx/submit", post(tx::submit))
         .route("/tx/:signature", get(tx::status))
+        .route("/resolve", get(resolve::resolve))
         .layer(axum::middleware::from_fn_with_state(
             gw.api_keys.clone(),
             auth::require_api_key,
