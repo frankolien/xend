@@ -22,11 +22,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .unwrap_or_else(|| "http://localhost:8081".to_string());
     let from = Keypair::from_base58_string(args.get(2).expect("from_secret_base58"));
-    let to = args.get(3).expect("to_pubkey").clone();
+    let to_arg = args.get(3).expect("to (address or .sol name)").clone();
     let lamports: u64 = args.get(4).expect("lamports").parse()?;
 
     let http = reqwest::Client::new();
     let b64 = base64::engine::general_purpose::STANDARD;
+
+    // Resolve a `.sol` name to an address first, exactly as the SDK's send() does.
+    let to = if to_arg.to_lowercase().ends_with(".sol") {
+        let resolved: serde_json::Value = http
+            .get(format!("{base_url}/v1/resolve"))
+            .query(&[("name", &to_arg)])
+            .send()
+            .await?
+            .json()
+            .await?;
+        let address = resolved["address"]
+            .as_str()
+            .ok_or("name did not resolve")?
+            .to_string();
+        println!("resolved {to_arg} -> {address}");
+        address
+    } else {
+        to_arg
+    };
 
     // 1. Build the unsigned transfer. The backend chooses the fee payer and, when it
     //    sponsors, returns the fee payer's signature over the message.
