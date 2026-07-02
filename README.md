@@ -8,9 +8,10 @@ backend is a witness, not a custodian.
 > [`docs/03-ROADMAP.md`](docs/03-ROADMAP.md).
 >
 > **What this repo is today (v0.1):** a real, buildable slice that proves the thesis — a
-> Solana non-custodial wallet + SDK, Flutter + native iOS signing + a Rust backend witness.
-> Everything else in the North Star is roadmap, and is labeled as such. We do not pretend to
-> have built what we have not.
+> Solana non-custodial wallet + SDK that **sends real value on devnet**. Flutter + native iOS
+> signing + a Rust backend witness, with embedded onboarding, iCloud recovery, gasless fees,
+> and `.sol` name resolution all working. Everything else in the North Star is roadmap, and is
+> labeled as such. We do not pretend to have built what we have not.
 
 ---
 
@@ -52,24 +53,30 @@ xend/
 
 ## Status
 
+Proven end-to-end on Solana **devnet** — real transfers, finalized on-chain. iOS only; not
+audited; no real funds.
+
 | Component | State |
 |---|---|
 | Docs & decisions | Drafted; all 10 forks + D0 decided |
-| Backend (Rust) | **✅ Phase 1**: builds; `/health` + `POST /v1/wallets` (base58-validated, idempotent) proven against real Postgres |
-| Native vault (Swift) | **✅ Phase 1**: Ed25519 keygen (verified) + base58 + Keychain; compiles via Xcode/CocoaPods into the app. `signMessage` = Phase 2 |
-| SDK (Dart) | **✅ Phase 1**: `create`/`load`/`delete` wired to native + backend; analyzes clean; widget tests pass. `send`/`balance`/`watch` = Phase 2+ |
-| Flutter example | **✅ builds** for iOS simulator; imports only `package:xend`. Final tap-test: run per [docs/05](docs/05-GETTING-STARTED.md) |
+| Backend (Rust) | **✅** Clean layered adapter/handlers/store; build → submit → status, balance, history, **`.sol` resolution**, **gasless paymaster**; gateway (API-key auth, rate limit, request-id); idempotent. Proven against real Postgres + devnet |
+| Native vault (Swift) | **✅** Ed25519 key from BIP-39/SLIP-0010 (spec-verified), Secure Enclave-wrapped, **Face ID signing**; **iCloud Keychain** recovery. Compiles via Xcode/CocoaPods into the app |
+| SDK (Dart) | **✅** `create`/`load`/`restore`/`delete`/`send`/`balance`/`watch`/`history`/`sign`/`resolveName`; SOL + SPL tokens; gasless + SNS transparent. Analyzes clean |
+| Flutter example | **✅** Full wallet UI on iOS simulator (send, balance, live watch, history); imports only `package:xend` |
 
-**Next: Phase 2** — the signing path (`tx/build` → Face-ID `signMessage` → `tx/submit` → confirm) on Solana devnet.
+**Built & proven:** embedded silent onboarding, on-device Face ID signing, SOL + SPL/USDC
+transfers, confirmation tracking, history, iCloud recovery, **gasless** fee sponsorship, and
+**`.sol`** name resolution — all sending real value on devnet.
 
-Nothing here signs or moves money yet. That is Phase 2. See the roadmap.
+**Roadmap:** Android, passkey/Squads Grid smart accounts, Solana Pay, session keys, WSS push
+for `watch()`, `swap`/`bridge`. See [docs/03-ROADMAP.md](docs/03-ROADMAP.md).
 
-### Verify Phase 1 backend yourself
+### Verify the backend yourself
 ```bash
-docker compose up -d --wait postgres
-cd backend && cargo run                      # binds :8080
+cd backend && cargo run                      # binds :8080 (needs Postgres + a devnet RPC)
 curl -s localhost:8080/health                # → ok
-curl -s -X POST localhost:8080/v1/wallets \
-  -H 'content-type: application/json' \
-  -d '{"pubkey":"7HEqBe5XA9T9K1T9BDz4HbBiwYsc56W2gSQ8jWsntFkX","label":"Main"}'
+curl -s 'localhost:8080/v1/resolve?name=bonfida.sol'   # → {"name":...,"address":...}
 ```
+Turn on gasless by setting `XEND_PAYMASTER_SECRET` (mint one with
+`cargo run --bin paymaster_keygen`, then airdrop it devnet SOL); the backend logs
+`gasless enabled` and every `send` is then fee-sponsored.
