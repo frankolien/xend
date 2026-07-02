@@ -23,11 +23,20 @@ import CryptoKit
 /// requires a live check, and it is shown to the app only when explicitly generated or
 /// revealed.
 ///
+/// For cross-device recovery, that same phrase is also stored once in the
+/// iCloud-synchronizable keychain (`seedVaultService`), end-to-end encrypted by Apple.
+/// It is the only item that ever leaves the device. It lets a signed-in user reappear on
+/// a new device with their wallet intact — no phrase to copy — through `loadOrRecover`,
+/// which finds the synced seed and silently rebuilds this device's per-device signing key
+/// from it. The Enclave-wrapped copies never sync: an Enclave key cannot leave its device,
+/// so iCloud Keychain, not the Enclave, provides the encryption for the travelling seed.
+///
 /// At signing time the Ed25519 key is decrypted into memory, used once, and its buffer is
 /// zeroed. The private key never crosses the platform channel and never leaves the device.
 protocol SecureSigning {
     func generateKeyPair(walletId: String) throws -> (address: String, mnemonic: String)
     func restore(walletId: String, mnemonic: String) throws -> String
+    func loadOrRecover(walletId: String) throws -> [String: Any]?
     func revealMnemonic(walletId: String, reason: String) throws -> String
     func signMessage(walletId: String, message: Data, reason: String) throws -> Data
     func getPublicKey(walletId: String) throws -> String
@@ -55,6 +64,10 @@ final class SecureSigner: SecureSigning {
     private static let ciphertextService = "ai.xend.ct"
     /// Keychain service for the wrapped (encrypted) BIP-39 recovery phrase.
     private static let mnemonicService = "ai.xend.mn"
+    /// Keychain service for the iCloud-synchronizable recovery seed (the BIP-39 phrase in
+    /// the clear, protected by iCloud Keychain's end-to-end encryption). This is the sole
+    /// item that leaves the device, and it is what makes a new device recover silently.
+    private static let seedVaultService = "ai.xend.seed"
 
     /// ECIES with an ephemeral key, X9.63 KDF, and AES-GCM — the standard algorithm for
     /// encrypting to a Secure Enclave P-256 key.
@@ -77,6 +90,7 @@ final class SecureSigner: SecureSigning {
         defer { privateKey.resetBytes(in: 0..<privateKey.count) }
 
         let address = try establish(walletId: walletId, privateKey: privateKey, mnemonic: mnemonic)
+        storeRecoverySeed(walletId: walletId, mnemonic: mnemonic)
         return (address, mnemonic)
     }
 
@@ -92,7 +106,34 @@ final class SecureSigner: SecureSigning {
         var privateKey = Mnemonic.solanaPrivateKey(from: mnemonic)
         defer { privateKey.resetBytes(in: 0..<privateKey.count) }
 
-        return try establish(walletId: walletId, privateKey: privateKey, mnemonic: mnemonic)
+        let address = try establish(walletId: walletId, privateKey: privateKey, mnemonic: mnemonic)
+        storeRecoverySeed(walletId: walletId, mnemonic: mnemonic)
+        return address
+    }
+
+    /// Re-provisions this device from a recovery seed that synced in from another device
+    /// via iCloud Keychain, or reports the wallet already present here. Returns `nil` when
+    /// neither a local key nor a synced seed exists — a genuinely new install that should
+    /// call `generateKeyPair`.
+    ///
+    /// The result maps `"address"` to the base58 address and `"recovered"` to whether this
+    /// call had to rebuild the signing key from a synced seed. The fast path (a key already
+    /// on this device) does no network or crypto work and never prompts; recovery derives
+    /// the key from the synced seed and re-wraps it under a fresh Enclave key, again with no
+    /// prompt, so a returning user simply finds their wallet waiting.
+    func loadOrRecover(walletId: String) throws -> [String: Any]? {
+        // Fast path: this device is already provisioned with a signing key.
+        if let address = try? getPublicKey(walletId: walletId) {
+            return ["address": address, "recovered": false]
+        }
+
+        // Recovery path: no local key, but a seed may have synced from another device.
+        guard let mnemonic = loadRecoverySeed(walletId: walletId) else { return nil }
+        var privateKey = Mnemonic.solanaPrivateKey(from: mnemonic)
+        defer { privateKey.resetBytes(in: 0..<privateKey.count) }
+
+        let address = try establish(walletId: walletId, privateKey: privateKey, mnemonic: mnemonic)
+        return ["address": address, "recovered": true]
     }
 
     /// Derives the address from `privateKey`, wraps both the key and `mnemonic` under a
@@ -216,17 +257,96 @@ final class SecureSigner: SecureSigning {
     // MARK: Deletion
 
     /// Removes the wallet's public address, wrapped private key, wrapped recovery phrase,
-    /// and Enclave key.
+    /// and Enclave key. Also removes the iCloud-synchronizable recovery seed, which
+    /// propagates the deletion to the user's other devices — deleting a wallet is meant to
+    /// remove it everywhere, not just here.
     func deleteKey(walletId: String) throws {
         for service in [Self.ciphertextService, Self.mnemonicService, Self.pubService] {
             let query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,
                 kSecAttrAccount as String: walletId,
-            ] 
+            ]
             SecItemDelete(query as CFDictionary) // errSecItemNotFound is acceptable
         }
+        // `kSecAttrSynchronizableAny` matches both the synced item and any local fallback.
+        let vaultQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.seedVaultService,
+            kSecAttrAccount as String: walletId,
+            kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
+        ]
+        SecItemDelete(vaultQuery as CFDictionary)
         deleteEnclaveKey(walletId: walletId)
+    }
+
+    // MARK: - Recovery seed vault (iCloud Keychain)
+
+    /// Stores the recovery seed in the iCloud-synchronizable keychain so it can travel,
+    /// end-to-end encrypted, to the user's other devices. Best-effort by design: an SDK
+    /// must never fail wallet creation because iCloud is unavailable, so if a synchronizable
+    /// write is refused (for example, on a simulator without iCloud Keychain) it falls back
+    /// to a local copy — the wallet still works and reloads on this device; only new-device
+    /// recovery is unavailable until the app runs on real hardware.
+    private func storeRecoverySeed(walletId: String, mnemonic: String) {
+        let data = Data(mnemonic.utf8)
+        do {
+            try keychainSetSeed(walletId: walletId, data: data, synchronizable: true)
+        } catch {
+            try? keychainSetSeed(walletId: walletId, data: data, synchronizable: false)
+            NSLog("Xend: recovery seed stored locally only (iCloud Keychain unavailable): \(error)")
+        }
+    }
+
+    /// Reads the recovery seed, preferring the synced item and falling back to any local
+    /// copy. Returns `nil` when neither exists.
+    private func loadRecoverySeed(walletId: String) -> String? {
+        for synchronizable in [true, false] {
+            if let data = try? keychainGetSeed(walletId: walletId, synchronizable: synchronizable),
+               let mnemonic = String(data: data, encoding: .utf8) {
+                return mnemonic
+            }
+        }
+        return nil
+    }
+
+    private func keychainSetSeed(walletId: String, data: Data, synchronizable: Bool) throws {
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.seedVaultService,
+            kSecAttrAccount as String: walletId,
+            kSecAttrSynchronizable as String: synchronizable ? kCFBooleanTrue! : kCFBooleanFalse!,
+        ]
+        SecItemDelete(base as CFDictionary) // overwrite any existing item
+
+        var add = base
+        add[kSecValueData as String] = data
+        // A synchronizable item must not be ThisDeviceOnly; `WhenUnlocked` keeps it out of
+        // reach until the device is unlocked while still allowing iCloud sync.
+        add[kSecAttrAccessible as String] = synchronizable
+            ? kSecAttrAccessibleWhenUnlocked
+            : kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+
+        let status = SecItemAdd(add as CFDictionary, nil)
+        guard status == errSecSuccess else { throw SecureSignerError.keychain(status) }
+    }
+
+    private func keychainGetSeed(walletId: String, synchronizable: Bool) throws -> Data {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.seedVaultService,
+            kSecAttrAccount as String: walletId,
+            kSecAttrSynchronizable as String: synchronizable ? kCFBooleanTrue! : kCFBooleanFalse!,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        if status == errSecItemNotFound { throw SecureSignerError.keyNotFound }
+        guard status == errSecSuccess, let data = out as? Data else {
+            throw SecureSignerError.keychain(status)
+        }
+        return data
     }
 
     // MARK: - Secure Enclave key management

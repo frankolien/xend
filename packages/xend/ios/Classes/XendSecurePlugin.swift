@@ -42,6 +42,9 @@ public class XendSecurePlugin: NSObject, FlutterPlugin {
             let mnemonic = try string(args, "mnemonic")
             return try signer.restore(walletId: walletId, mnemonic: mnemonic)
 
+        case "loadOrRecover":
+            return try signer.loadOrRecover(walletId: try string(args, "walletId"))
+
         case "revealMnemonic":
             let walletId = try string(args, "walletId")
             let reason = args["reason"] as? String ?? "Reveal your recovery phrase"
