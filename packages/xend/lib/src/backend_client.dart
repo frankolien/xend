@@ -34,8 +34,10 @@ class BackendClient {
   /// `POST /v1/tx/build` — request an unsigned transfer for the device to sign.
   ///
   /// Returns the base64-encoded transaction [message] and the Unix second [validUntil]
-  /// after which it must be rebuilt rather than broadcast.
-  Future<({String message, int validUntil})> buildTransfer({
+  /// after which it must be rebuilt rather than broadcast. [feePayerSignature] is present
+  /// only when the backend sponsors the fee (gasless): it is the fee payer's base64
+  /// signature over [message], which the device assembles ahead of its own.
+  Future<({String message, int validUntil, String? feePayerSignature})> buildTransfer({
     required String from,
     required String to,
     required BigInt amount,
@@ -50,6 +52,7 @@ class BackendClient {
     return (
       message: body['message'] as String,
       validUntil: body['valid_until'] as int,
+      feePayerSignature: body['fee_payer_signature'] as String?,
     );
   }
 

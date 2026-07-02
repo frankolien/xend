@@ -202,7 +202,8 @@ class XendWallet {
     final mint = asset?.mint;
 
     // 1. The backend assembles the unsigned transfer, fetching the recent blockhash the
-    //    device must not compute for itself.
+    //    device must not compute for itself. When fees are sponsored it also returns the
+    //    fee payer's signature, so the user can send holding no SOL.
     final built = await Xend.backend.buildTransfer(
       from: address,
       to: to,
@@ -224,9 +225,16 @@ class XendWallet {
       throw _mapNativeError(e);
     }
 
-    // 3. Assemble the signed transaction in wire format and broadcast it. The idempotency
-    //    key makes the whole build-sign-submit round trip safe to retry.
-    final signed = _assembleSignedTransaction(signature, message);
+    // 3. Assemble the signed transaction in wire format and broadcast it. A sponsored
+    //    transfer carries the fee payer's signature ahead of the sender's, in signer order;
+    //    an unsponsored one carries the sender's alone. The idempotency key makes the whole
+    //    build-sign-submit round trip safe to retry.
+    final feePayerSignature = built.feePayerSignature;
+    final signatures = <Uint8List>[
+      if (feePayerSignature != null) base64Decode(feePayerSignature),
+      signature,
+    ];
+    final signed = _assembleSignedTransaction(signatures, message);
     final result = await Xend.backend.submitTransaction(
       signed: base64Encode(signed),
       idempotencyKey: idempotencyKey ?? _newIdempotencyKey(),
@@ -347,15 +355,35 @@ class XendWallet {
   }
 }
 
-/// Assembles a signed Solana transaction in wire format: the compact-u16 signature count
-/// (the byte `0x01` for a single signer), the 64-byte signature, then the serialized
-/// message. This is the exact byte layout the backend parses back before broadcasting.
-Uint8List _assembleSignedTransaction(Uint8List signature, Uint8List message) {
+/// Assembles a signed Solana transaction in wire format: the compact-u16 count of
+/// [signatures], each 64-byte signature in signer order, then the serialized [message].
+/// This is the exact byte layout the backend parses back before broadcasting. A sponsored
+/// transfer has two signatures (fee payer, then sender); an unsponsored one has a single
+/// sender signature.
+Uint8List _assembleSignedTransaction(List<Uint8List> signatures, Uint8List message) {
   final builder = BytesBuilder();
-  builder.addByte(0x01);
-  builder.add(signature);
+  _writeCompactU16(builder, signatures.length);
+  for (final signature in signatures) {
+    builder.add(signature);
+  }
   builder.add(message);
   return builder.toBytes();
+}
+
+/// Writes [value] as a Solana compact-u16 (shortvec length): 7 bits per byte, little-endian,
+/// with the high bit marking continuation. Signature counts are tiny, but encoding it
+/// correctly keeps the wire format honest rather than assuming a single byte.
+void _writeCompactU16(BytesBuilder builder, int value) {
+  var remaining = value;
+  while (true) {
+    final byte = remaining & 0x7f;
+    remaining >>= 7;
+    if (remaining == 0) {
+      builder.addByte(byte);
+      return;
+    }
+    builder.addByte(byte | 0x80);
+  }
 }
 
 /// Generates a random 128-bit idempotency key as lowercase hex. A distinct key per call
