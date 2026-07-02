@@ -34,7 +34,18 @@ public class XendSecurePlugin: NSObject, FlutterPlugin {
         let args = call.arguments as? [String: Any] ?? [:]
         switch call.method {
         case "generateKeyPair":
-            return try signer.generateKeyPair(walletId: try string(args, "walletId"))
+            let result = try signer.generateKeyPair(walletId: try string(args, "walletId"))
+            return ["address": result.address, "mnemonic": result.mnemonic]
+
+        case "restore":
+            let walletId = try string(args, "walletId")
+            let mnemonic = try string(args, "mnemonic")
+            return try signer.restore(walletId: walletId, mnemonic: mnemonic)
+
+        case "revealMnemonic":
+            let walletId = try string(args, "walletId")
+            let reason = args["reason"] as? String ?? "Reveal your recovery phrase"
+            return try signer.revealMnemonic(walletId: walletId, reason: reason)
 
         case "getPublicKey":
             return try signer.getPublicKey(walletId: try string(args, "walletId"))
@@ -83,6 +94,8 @@ public class XendSecurePlugin: NSObject, FlutterPlugin {
             return FlutterError(code: "keychain_error", message: "Keychain error \(status)", details: nil)
         case .enclave(let message):
             return FlutterError(code: "enclave_error", message: message, details: nil)
+        case .invalidMnemonic:
+            return FlutterError(code: "invalid_mnemonic", message: "Recovery phrase is not valid", details: nil)
         }
     }
 }

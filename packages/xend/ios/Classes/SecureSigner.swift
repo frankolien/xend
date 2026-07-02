@@ -3,10 +3,9 @@ import LocalAuthentication
 import Security
 import CryptoKit
 
-/// On-device key management for a wallet: key generation, secure storage, biometric
-/// authentication, and Ed25519 signing. This type exposes four operations and has no
-/// knowledge of the application, backend, or network; it operates only on the bytes it
-/// is given.
+/// On-device key management for a wallet: key generation and recovery, secure storage,
+/// biometric authentication, and Ed25519 signing. It has no knowledge of the application,
+/// backend, or network; it operates only on the bytes it is given.
 ///
 /// Design constraint: Solana signs with Ed25519, while the Secure Enclave can hold only
 /// P-256 keys. The Enclave therefore does not store the signing key directly — it
@@ -18,10 +17,18 @@ import CryptoKit
 ///   - Decryption is gated by biometrics via the key's access control, so the Ed25519 key
 ///     is recoverable only behind a live Face ID / Touch ID check.
 ///
+/// The signing key is derived from a BIP-39 recovery phrase (SLIP-0010 ed25519 at
+/// `m/44'/501'/0'/0'`), so the same phrase restores the same wallet in any BIP-39 wallet.
+/// The phrase is wrapped and biometric-gated exactly like the key, so revealing it also
+/// requires a live check, and it is shown to the app only when explicitly generated or
+/// revealed.
+///
 /// At signing time the Ed25519 key is decrypted into memory, used once, and its buffer is
 /// zeroed. The private key never crosses the platform channel and never leaves the device.
 protocol SecureSigning {
-    func generateKeyPair(walletId: String) throws -> String
+    func generateKeyPair(walletId: String) throws -> (address: String, mnemonic: String)
+    func restore(walletId: String, mnemonic: String) throws -> String
+    func revealMnemonic(walletId: String, reason: String) throws -> String
     func signMessage(walletId: String, message: Data, reason: String) throws -> Data
     func getPublicKey(walletId: String) throws -> String
     func deleteKey(walletId: String) throws
@@ -37,6 +44,7 @@ enum SecureSignerError: Error {
     case badPublicKeyData
     case badArguments(String) // missing or invalid channel argument
     case enclave(String) // a Secure Enclave / crypto operation failed
+    case invalidMnemonic // the supplied recovery phrase is malformed or fails its checksum
 }
 
 final class SecureSigner: SecureSigning {
@@ -45,6 +53,8 @@ final class SecureSigner: SecureSigning {
     private static let pubService = "ai.xend.pub"
     /// Keychain service for the wrapped (encrypted) Ed25519 private key.
     private static let ciphertextService = "ai.xend.ct"
+    /// Keychain service for the wrapped (encrypted) BIP-39 recovery phrase.
+    private static let mnemonicService = "ai.xend.mn"
 
     /// ECIES with an ephemeral key, X9.63 KDF, and AES-GCM — the standard algorithm for
     /// encrypting to a Secure Enclave P-256 key.
@@ -55,16 +65,41 @@ final class SecureSigner: SecureSigning {
         Data("ai.xend.enclave.\(walletId)".utf8)
     }
 
-    // MARK: Key generation
+    // MARK: Key generation & recovery
 
-    /// Generates an Ed25519 key pair, wraps the private key with a freshly generated
-    /// Secure-Enclave P-256 key, persists the ciphertext, and returns the base58 public
-    /// address. The plaintext private key is held in memory only briefly and its buffer
-    /// is zeroed before returning.
-    func generateKeyPair(walletId: String) throws -> String {
-        let signingKey = Curve25519.Signing.PrivateKey()
-        let publicKey = [UInt8](signingKey.publicKey.rawRepresentation) // 32 bytes
-        let address = Base58.encode(publicKey)
+    /// Generates a fresh BIP-39 recovery phrase, derives the wallet's Ed25519 key from it,
+    /// wraps the key and the phrase under a Secure-Enclave key, persists them, and returns
+    /// the address together with the phrase for the user to write down. The plaintext
+    /// private key is held only briefly and its buffer is zeroed before returning.
+    func generateKeyPair(walletId: String) throws -> (address: String, mnemonic: String) {
+        let mnemonic = Mnemonic.generate()
+        var privateKey = Mnemonic.solanaPrivateKey(from: mnemonic)
+        defer { privateKey.resetBytes(in: 0..<privateKey.count) }
+
+        let address = try establish(walletId: walletId, privateKey: privateKey, mnemonic: mnemonic)
+        return (address, mnemonic)
+    }
+
+    /// Restores a wallet from a recovery phrase: validates it, re-derives the same key,
+    /// and persists it. Returns the base58 address. Throws `.invalidMnemonic` if the phrase
+    /// is malformed or its checksum fails.
+    func restore(walletId: String, mnemonic: String) throws -> String {
+        do {
+            try Mnemonic.validate(mnemonic)
+        } catch {
+            throw SecureSignerError.invalidMnemonic
+        }
+        var privateKey = Mnemonic.solanaPrivateKey(from: mnemonic)
+        defer { privateKey.resetBytes(in: 0..<privateKey.count) }
+
+        return try establish(walletId: walletId, privateKey: privateKey, mnemonic: mnemonic)
+    }
+
+    /// Derives the address from `privateKey`, wraps both the key and `mnemonic` under a
+    /// fresh Enclave key, and persists everything. Shared by generation and restore.
+    private func establish(walletId: String, privateKey: Data, mnemonic: String) throws -> String {
+        let signingKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKey)
+        let address = Base58.encode([UInt8](signingKey.publicKey.rawRepresentation))
 
         let enclaveKey = try createEnclaveKey(walletId: walletId)
         guard let enclavePublicKey = SecKeyCopyPublicKey(enclaveKey) else {
@@ -74,22 +109,56 @@ final class SecureSigner: SecureSigning {
             throw SecureSignerError.enclave("ECIES not supported by enclave key")
         }
 
-        var privateKey = [UInt8](signingKey.rawRepresentation)
-        defer { for i in privateKey.indices { privateKey[i] = 0 } } // zero the local copy
+        let keyCiphertext = try wrap(privateKey, to: enclavePublicKey, describedAs: "the private key")
+        let phraseCiphertext = try wrap(Data(mnemonic.utf8), to: enclavePublicKey, describedAs: "the recovery phrase")
 
-        var encryptError: Unmanaged<CFError>?
+        try keychainSet(service: Self.ciphertextService, account: walletId, data: keyCiphertext)
+        try keychainSet(service: Self.mnemonicService, account: walletId, data: phraseCiphertext)
+        try keychainSet(service: Self.pubService, account: walletId, data: Data(address.utf8))
+        return address
+    }
+
+    /// ECIES-encrypts `plaintext` to the Enclave key's public key.
+    private func wrap(_ plaintext: Data, to enclavePublicKey: SecKey, describedAs label: String) throws -> Data {
+        var error: Unmanaged<CFError>?
         guard let ciphertext = SecKeyCreateEncryptedData(
             enclavePublicKey,
             Self.eciesAlgorithm,
-            Data(privateKey) as CFData,
-            &encryptError
+            plaintext as CFData,
+            &error
         ) else {
-            throw SecureSignerError.enclave("wrapping the private key failed")
+            throw SecureSignerError.enclave("wrapping \(label) failed")
+        }
+        return ciphertext as Data
+    }
+
+    /// Reveals the wallet's recovery phrase after biometric authentication. The phrase is
+    /// decrypted only to be returned; nothing is stored in the clear.
+    func revealMnemonic(walletId: String, reason: String) throws -> String {
+        let context = LAContext()
+        context.localizedReason = reason
+
+        let enclaveKey = try loadEnclaveKey(walletId: walletId, context: context)
+        let ciphertext = try keychainGet(service: Self.mnemonicService, account: walletId)
+
+        var decryptError: Unmanaged<CFError>?
+        guard let plaintext = SecKeyCreateDecryptedData(
+            enclaveKey,
+            Self.eciesAlgorithm,
+            ciphertext as CFData,
+            &decryptError
+        ) else {
+            let code = decryptError.map { CFErrorGetCode($0.takeRetainedValue()) }
+            if code == -128 || code == -2 || code == Int(errSecAuthFailed) {
+                throw SecureSignerError.authenticationCancelled
+            }
+            throw SecureSignerError.enclave("unwrapping the recovery phrase failed (\(code ?? 0))")
         }
 
-        try keychainSet(service: Self.ciphertextService, account: walletId, data: ciphertext as Data)
-        try keychainSet(service: Self.pubService, account: walletId, data: Data(address.utf8))
-        return address
+        guard let mnemonic = String(data: plaintext as Data, encoding: .utf8) else {
+            throw SecureSignerError.enclave("stored recovery phrase is corrupt")
+        }
+        return mnemonic
     }
 
     // MARK: Signing
@@ -146,14 +215,15 @@ final class SecureSigner: SecureSigning {
 
     // MARK: Deletion
 
-    /// Removes the wallet's public address, wrapped private key, and Enclave key.
+    /// Removes the wallet's public address, wrapped private key, wrapped recovery phrase,
+    /// and Enclave key.
     func deleteKey(walletId: String) throws {
-        for service in [Self.ciphertextService, Self.pubService] {
+        for service in [Self.ciphertextService, Self.mnemonicService, Self.pubService] {
             let query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,
                 kSecAttrAccount as String: walletId,
-            ]
+            ] 
             SecItemDelete(query as CFDictionary) // errSecItemNotFound is acceptable
         }
         deleteEnclaveKey(walletId: walletId)
