@@ -157,7 +157,8 @@ class XendWallet {
     return Balance(asset: asset ?? Asset.native(chain), amount: amount);
   }
 
-  /// Sends [amount] of [asset] to the address [to].
+  /// Sends [amount] of [asset] to [to], which may be an address or a `.sol` name (such as
+  /// `gift.sol`) that is resolved automatically.
   ///
   /// The transaction is built by the Xend backend, signed on this device behind
   /// biometric authentication, and then broadcast. The method returns as soon as the
@@ -201,12 +202,16 @@ class XendWallet {
     }
     final mint = asset?.mint;
 
+    // Resolve a `.sol` name to its address up front, so building, signing, and the recorded
+    // recipient all use the same concrete address. A plain address passes through unchanged.
+    final recipient = await resolveName(to);
+
     // 1. The backend assembles the unsigned transfer, fetching the recent blockhash the
     //    device must not compute for itself. When fees are sponsored it also returns the
     //    fee payer's signature, so the user can send holding no SOL.
     final built = await Xend.backend.buildTransfer(
       from: address,
-      to: to,
+      to: recipient,
       amount: amount,
       mint: mint,
     );
@@ -239,7 +244,7 @@ class XendWallet {
       signed: base64Encode(signed),
       idempotencyKey: idempotencyKey ?? _newIdempotencyKey(),
       from: address,
-      to: to,
+      to: recipient,
       amount: amount,
       mint: mint,
     );
@@ -249,6 +254,18 @@ class XendWallet {
 
   /// Returns the address at which this wallet can receive funds.
   String receive() => address;
+
+  /// Resolves a human-readable name to an address, so an app can display or validate a
+  /// destination before sending. Solana `.sol` domains (such as `gift.sol`) resolve through
+  /// the Solana Name Service; a value that is already an address is returned unchanged.
+  ///
+  /// [send] performs this resolution automatically, so calling it first is only necessary
+  /// when the app wants to show the resolved address. Throws [InvalidRecipient] if the name
+  /// is not registered.
+  static Future<String> resolveName(String nameOrAddress) async {
+    if (!_isName(nameOrAddress)) return nameOrAddress;
+    return Xend.backend.resolveName(nameOrAddress);
+  }
 
   /// Swaps [amount] of [from] into [to], optionally bounding slippage with
   /// [maxSlippage].
@@ -353,6 +370,10 @@ class XendWallet {
       throw NotImplementedYet('$call on ${chain.name}');
     }
   }
+
+  /// Whether [value] looks like a name to resolve rather than a raw address. Solana `.sol`
+  /// domains end in `.sol`; base58 addresses never do.
+  static bool _isName(String value) => value.toLowerCase().endsWith('.sol');
 }
 
 /// Assembles a signed Solana transaction in wire format: the compact-u16 count of

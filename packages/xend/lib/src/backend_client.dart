@@ -84,6 +84,14 @@ class BackendClient {
     );
   }
 
+  /// `GET /v1/resolve` — resolve a chain-native name (such as `gift.sol`) to an address.
+  ///
+  /// Throws [InvalidRecipient] if the name is malformed or not registered.
+  Future<String> resolveName(String name) async {
+    final body = await _get('/v1/resolve?name=${Uri.encodeQueryComponent(name)}');
+    return body['address'] as String;
+  }
+
   /// `GET /v1/wallets/:pubkey/balance` — the wallet's balance in base units.
   Future<BigInt> getBalance(String pubkey, {String? mint}) async {
     final query = mint != null ? '?mint=$mint' : '';
