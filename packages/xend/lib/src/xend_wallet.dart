@@ -80,16 +80,29 @@ class XendWallet {
     return XendWallet._(_defaultWalletId, address, chain);
   }
 
-  /// Loads the wallet already stored on this device, or `null` if none exists.
+  /// Loads the wallet for this user, or `null` if there is none to load.
   ///
-  /// Typically called on startup to restore a previously created wallet. No network
-  /// request is made and the key never leaves the device.
+  /// Typically called on startup. If a wallet already exists on this device it is returned
+  /// immediately, with no network request and without the key ever leaving the device. If
+  /// this is a fresh device but the user set up a wallet elsewhere, its recovery seed
+  /// arrives silently through iCloud Keychain and the on-device signing key is rebuilt from
+  /// it — the wallet simply reappears, with no recovery phrase to enter. In that recovery
+  /// case only, the address is re-registered with the backend (idempotently) so balances
+  /// and history resolve on the new device.
   static Future<XendWallet?> load({Chain chain = Chain.solana}) async {
     _requireSolana(chain, 'XendWallet.load');
     const channel = SecureChannel();
-    final address = await channel.getPublicKeyOrNull(_defaultWalletId);
-    if (address == null) return null;
-    return XendWallet._(_defaultWalletId, address, chain);
+    final ({String address, bool recovered})? result;
+    try {
+      result = await channel.loadOrRecover(_defaultWalletId);
+    } on PlatformException catch (e) {
+      throw _mapNativeError(e);
+    }
+    if (result == null) return null;
+    if (result.recovered) {
+      await Xend.backend.registerWallet(result.address);
+    }
+    return XendWallet._(_defaultWalletId, result.address, chain);
   }
 
   /// Restores a wallet from its BIP-39 recovery phrase, re-deriving the same key on-device

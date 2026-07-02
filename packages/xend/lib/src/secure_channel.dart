@@ -39,15 +39,20 @@ class SecureChannel {
     return mnemonic!;
   }
 
-  /// Returns the stored base58 address, or null if this wallet has no key yet. Used by
-  /// the app-restart read path.
-  Future<String?> getPublicKeyOrNull(String walletId) async {
-    try {
-      return await _channel.invokeMethod<String>('getPublicKey', {'walletId': walletId});
-    } on PlatformException catch (e) {
-      if (e.code == 'key_not_found') return null;
-      rethrow;
-    }
+  /// Loads the wallet already on this device, or silently recovers one whose seed synced
+  /// in from another device via iCloud Keychain, rebuilding the local signing key. Returns
+  /// the base58 [address] and whether recovery had to run ([recovered]); returns null when
+  /// this is a genuinely new install with nothing to load.
+  Future<({String address, bool recovered})?> loadOrRecover(String walletId) async {
+    final result = await _channel.invokeMapMethod<String, dynamic>(
+      'loadOrRecover',
+      {'walletId': walletId},
+    );
+    if (result == null) return null;
+    return (
+      address: result['address'] as String,
+      recovered: (result['recovered'] as bool?) ?? false,
+    );
   }
 
   Future<Uint8List> signMessage(String walletId, Uint8List bytes, String reason) async {
