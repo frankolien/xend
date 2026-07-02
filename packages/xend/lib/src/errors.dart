@@ -81,6 +81,14 @@ final class ChainRejected extends XendError {
   final String reason;
 }
 
+/// The supplied recovery phrase is not a valid BIP-39 mnemonic (wrong length, an unknown
+/// word, or a failed checksum).
+///
+/// Terminal: correct the phrase and try again.
+final class InvalidRecoveryPhrase extends XendError {
+  const InvalidRecoveryPhrase([super.message = 'Invalid recovery phrase']);
+}
+
 /// The requested capability is not available in this release.
 ///
 /// The method's signature is stable, but its implementation is planned for a future

@@ -69,7 +69,10 @@ class XendWallet {
     const channel = SecureChannel();
     final String address;
     try {
-      address = await channel.generateKeyPair(_defaultWalletId);
+      // The recovery phrase is generated and stored on-device but is not surfaced here:
+      // onboarding stays silent (embedded-wallet style). Retrieve it later, only if the
+      // user explicitly asks, via [revealRecoveryPhrase].
+      address = (await channel.generateKeyPair(_defaultWalletId)).address;
     } on PlatformException catch (e) {
       throw _mapNativeError(e);
     }
@@ -89,15 +92,41 @@ class XendWallet {
     return XendWallet._(_defaultWalletId, address, chain);
   }
 
-  /// Restores a wallet from its recovery phrase.
+  /// Restores a wallet from its BIP-39 recovery phrase, re-deriving the same key on-device
+  /// and registering its address. Use this to move a wallet to a new device.
   ///
-  /// Not yet available in this release; currently throws [NotImplementedYet].
+  /// Throws [InvalidRecoveryPhrase] if [mnemonic] is not a valid BIP-39 phrase.
   static Future<XendWallet> restore(
     String mnemonic, {
     Chain chain = Chain.solana,
-  }) {
+  }) async {
     _requireSolana(chain, 'XendWallet.restore');
-    throw const NotImplementedYet('XendWallet.restore');
+    const channel = SecureChannel();
+    final String address;
+    try {
+      address = await channel.restore(_defaultWalletId, mnemonic.trim());
+    } on PlatformException catch (e) {
+      throw _mapNativeError(e);
+    }
+    await Xend.backend.registerWallet(address);
+    return XendWallet._(_defaultWalletId, address, chain);
+  }
+
+  /// Reveals this wallet's recovery phrase behind biometric authentication, so the user
+  /// can back it up after creation. The returned phrase is sensitive: display it, let the
+  /// user record it, and discard it — never persist or transmit it.
+  ///
+  /// [reason] is shown in the authentication prompt. Throws [UserCancelledAuth] if the
+  /// prompt is dismissed.
+  Future<String> revealRecoveryPhrase({
+    String reason = 'Reveal your recovery phrase',
+  }) async {
+    _requireSolana(chain, 'XendWallet.revealRecoveryPhrase');
+    try {
+      return await const SecureChannel().revealMnemonic(_walletId, reason);
+    } on PlatformException catch (e) {
+      throw _mapNativeError(e);
+    }
   }
 
   /// Permanently removes this wallet's key material from the device's secure store.
@@ -383,6 +412,8 @@ XendError _mapNativeError(PlatformException e) {
   switch (e.code) {
     case 'user_cancelled_auth':
       return const UserCancelledAuth();
+    case 'invalid_mnemonic':
+      return const InvalidRecoveryPhrase();
     case 'biometrics_unavailable':
       return const NetworkError('Biometric authentication is unavailable on this device');
     default:

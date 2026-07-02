@@ -17,6 +17,7 @@ export 'src/errors.dart'
         UserCancelledAuth,
         BlockhashExpired,
         InvalidRecipient,
+        InvalidRecoveryPhrase,
         RateLimited,
         ChainRejected,
         NotImplementedYet;
