@@ -10,6 +10,7 @@ mod app;
 mod chain;
 mod db;
 mod error;
+mod gateway;
 mod handlers;
 mod state;
 mod store;
@@ -34,11 +35,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = db::connect(&db_url).await?;
     let chain: Arc<dyn ChainAdapter> = Arc::new(SolanaAdapter::new(rpc_url));
     let state = AppState { pool, chain };
+    let gateway = gateway::Gateway::from_env();
 
-    let addr = "0.0.0.0:8080";
+    let addr = env::var("XEND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     tracing::info!(%addr, "xend-backend listening");
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app::router(state)).await?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app::router(state, gateway)).await?;
     Ok(())
 }
