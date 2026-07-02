@@ -68,6 +68,9 @@ class _WalletScreenState extends State<WalletScreen> {
   Future<void> _create() async {
     setState(() => _busy = true);
     try {
+      // Silent, embedded-style onboarding: the wallet is provisioned on-device with no
+      // recovery phrase shown. The phrase is available later under "Export recovery
+      // phrase" for users who want to self-custody or import elsewhere.
       final wallet = await XendWallet.create(label: 'Main');
       if (!mounted) return;
       setState(() => _wallet = wallet);
@@ -77,6 +80,43 @@ class _WalletScreenState extends State<WalletScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _restore() async {
+    final phrase = await showDialog<String>(
+      context: context,
+      builder: (_) => const _RestoreDialog(),
+    );
+    if (phrase == null || phrase.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final wallet = await XendWallet.restore(phrase);
+      if (!mounted) return;
+      setState(() => _wallet = wallet);
+      _refresh();
+    } on XendError catch (e) {
+      _toast(e.message); // e.g. InvalidRecoveryPhrase on a typo
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _revealPhrase() async {
+    final wallet = _wallet;
+    if (wallet == null) return;
+    try {
+      final phrase = await wallet.revealRecoveryPhrase();
+      if (mounted) await _showBackup(phrase, isReveal: true);
+    } on XendError catch (e) {
+      _toast(e.message); // e.g. UserCancelledAuth
+    }
+  }
+
+  Future<void> _showBackup(String phrase, {required bool isReveal}) {
+    return showDialog<void>(
+      context: context,
+      builder: (_) => _PhraseDialog(phrase: phrase, isReveal: isReveal),
+    );
   }
 
   Future<void> _refreshBalance() async {
@@ -175,17 +215,25 @@ class _WalletScreenState extends State<WalletScreen> {
         backgroundColor: Colors.transparent,
         actions: [
           if (wallet != null)
-            IconButton(
-              tooltip: 'Delete wallet',
-              onPressed: _delete,
+            PopupMenuButton<String>(
               icon: const Icon(Icons.more_horiz),
+              onSelected: (value) {
+                if (value == 'reveal') _revealPhrase();
+                if (value == 'delete') _delete();
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'reveal', child: Text('Export recovery phrase')),
+                PopupMenuItem(value: 'delete', child: Text('Delete wallet')),
+              ],
             ),
         ],
       ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: wallet == null ? _EmptyState(busy: _busy, onCreate: _create) : _walletView(wallet),
+          child: wallet == null
+              ? _EmptyState(busy: _busy, onCreate: _create, onRestore: _restore)
+              : _walletView(wallet),
         ),
       ),
     );
@@ -231,10 +279,11 @@ class _WalletScreenState extends State<WalletScreen> {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.busy, required this.onCreate});
+  const _EmptyState({required this.busy, required this.onCreate, required this.onRestore});
 
   final bool busy;
   final VoidCallback onCreate;
+  final VoidCallback onRestore;
 
   @override
   Widget build(BuildContext context) {
@@ -255,6 +304,10 @@ class _EmptyState extends StatelessWidget {
           FilledButton(
             onPressed: busy ? null : onCreate,
             child: Text(busy ? 'Creating…' : 'Create wallet'),
+          ),
+          TextButton(
+            onPressed: busy ? null : onRestore,
+            child: const Text('Import a recovery phrase'),
           ),
         ],
       ),
@@ -606,6 +659,108 @@ class _HistoryRow extends StatelessWidget {
         _shortAge(record.createdAt),
         style: const TextStyle(fontSize: 12, color: Colors.grey),
       ),
+    );
+  }
+}
+
+/// Displays a recovery phrase for backup — the numbered words, a warning, and a copy
+/// action. Shown once after creation and again on demand via "Reveal recovery phrase".
+class _PhraseDialog extends StatelessWidget {
+  const _PhraseDialog({required this.phrase, required this.isReveal});
+
+  final String phrase;
+  final bool isReveal;
+
+  @override
+  Widget build(BuildContext context) {
+    final words = phrase.split(' ');
+    return AlertDialog(
+      title: Text(isReveal ? 'Recovery phrase' : 'Back up your wallet'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Write these words down in order and keep them somewhere safe. Anyone with them '
+            'controls the wallet, and Xend cannot recover them for you.',
+            style: TextStyle(fontSize: 13, color: Colors.grey),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (var i = 0; i < words.length; i++)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0F4F4),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text('${i + 1}. ${words[i]}',
+                      style: const TextStyle(fontFamily: 'Menlo', fontSize: 13)),
+                ),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: phrase));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(const SnackBar(content: Text('Recovery phrase copied')));
+            }
+          },
+          child: const Text('Copy'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(isReveal ? 'Done' : "I've saved it"),
+        ),
+      ],
+    );
+  }
+}
+
+/// Prompts for a recovery phrase and returns it (trimmed) to restore a wallet.
+class _RestoreDialog extends StatefulWidget {
+  const _RestoreDialog();
+
+  @override
+  State<_RestoreDialog> createState() => _RestoreDialogState();
+}
+
+class _RestoreDialogState extends State<_RestoreDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Restore wallet'),
+      content: TextField(
+        controller: _controller,
+        maxLines: 3,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: 'Enter your 12-word recovery phrase',
+          border: OutlineInputBorder(),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: const Text('Restore'),
+        ),
+      ],
     );
   }
 }
