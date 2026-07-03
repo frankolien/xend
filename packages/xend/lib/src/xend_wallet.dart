@@ -1,14 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show PlatformException;
 
 import 'config.dart';
 import 'errors.dart';
+import 'mappings.dart';
 import 'models.dart';
 import 'secure_channel.dart';
+import 'wire.dart';
 
 /// A non-custodial wallet: an on-device key pair plus the operations to observe and move
 /// the value it controls.
@@ -71,7 +72,7 @@ class XendWallet {
       // [revealRecoveryPhrase] if the user asks.
       address = (await channel.generateKeyPair(_defaultWalletId)).address;
     } on PlatformException catch (e) {
-      throw _mapNativeError(e);
+      throw mapNativeError(e);
     }
     await Xend.backend.registerWallet(address, label: label);
     return XendWallet._(_defaultWalletId, address, chain);
@@ -92,7 +93,7 @@ class XendWallet {
     try {
       result = await channel.loadOrRecover(_defaultWalletId);
     } on PlatformException catch (e) {
-      throw _mapNativeError(e);
+      throw mapNativeError(e);
     }
     if (result == null) return null;
     if (result.recovered) {
@@ -115,7 +116,7 @@ class XendWallet {
     try {
       address = await channel.restore(_defaultWalletId, mnemonic.trim());
     } on PlatformException catch (e) {
-      throw _mapNativeError(e);
+      throw mapNativeError(e);
     }
     await Xend.backend.registerWallet(address);
     return XendWallet._(_defaultWalletId, address, chain);
@@ -134,7 +135,7 @@ class XendWallet {
     try {
       return await const SecureChannel().revealMnemonic(_walletId, reason);
     } on PlatformException catch (e) {
-      throw _mapNativeError(e);
+      throw mapNativeError(e);
     }
   }
 
@@ -221,7 +222,7 @@ class XendWallet {
         'Approve sending to $to',
       );
     } on PlatformException catch (e) {
-      throw _mapNativeError(e);
+      throw mapNativeError(e);
     }
 
     // 3. Assemble the signed transaction in wire format and broadcast it. A sponsored
@@ -233,10 +234,10 @@ class XendWallet {
       if (feePayerSignature != null) base64Decode(feePayerSignature),
       signature,
     ];
-    final signed = _assembleSignedTransaction(signatures, message);
+    final signed = assembleSignedTransaction(signatures, message);
     final result = await Xend.backend.submitTransaction(
       signed: base64Encode(signed),
-      idempotencyKey: idempotencyKey ?? _newIdempotencyKey(),
+      idempotencyKey: idempotencyKey ?? newIdempotencyKey(),
       from: address,
       to: recipient,
       amount: amount,
@@ -256,7 +257,7 @@ class XendWallet {
   /// [send] resolves automatically, so call this first only to show the resolved address.
   /// Throws [InvalidRecipient] if the name is not registered.
   static Future<String> resolveName(String nameOrAddress) async {
-    if (!_isName(nameOrAddress)) return nameOrAddress;
+    if (!isSolName(nameOrAddress)) return nameOrAddress;
     return Xend.backend.resolveName(nameOrAddress);
   }
 
@@ -301,7 +302,7 @@ class XendWallet {
         reason,
       );
     } on PlatformException catch (e) {
-      throw _mapNativeError(e);
+      throw mapNativeError(e);
     }
   }
 
@@ -330,7 +331,7 @@ class XendWallet {
 
     while (true) {
       final raw = await Xend.backend.getTransactionStatus(handle.id);
-      final status = _statusFromBackend(handle, raw);
+      final status = txStatusFromBackend(handle, raw);
 
       // Emit on the first observation and whenever the commitment advances, so a listener
       // sees each transition once rather than a status per poll.
@@ -353,125 +354,12 @@ class XendWallet {
     _requireSolana(chain, 'XendWallet.history');
     final raw =
         await Xend.backend.getHistory(address, limit: limit, before: before);
-    return raw.map((json) => _txRecordFromJson(json, chain)).toList();
+    return raw.map((json) => txRecordFromJson(json, chain)).toList();
   }
 
   static void _requireSolana(Chain chain, String call) {
     if (chain != Chain.solana) {
       throw NotImplementedYet('$call on ${chain.name}');
     }
-  }
-
-  /// Whether [value] looks like a name to resolve rather than a raw address. `.sol`
-  /// domains end in `.sol`; base58 addresses do not.
-  static bool _isName(String value) => value.toLowerCase().endsWith('.sol');
-}
-
-/// Assembles a signed Solana transaction in wire format: the compact-u16 count of
-/// [signatures], each 64-byte signature in signer order, then the serialized [message].
-/// This is the byte layout the backend parses before broadcasting. A sponsored transfer
-/// has two signatures (fee payer, then sender); an unsponsored one has a single sender
-/// signature.
-Uint8List _assembleSignedTransaction(
-    List<Uint8List> signatures, Uint8List message) {
-  final builder = BytesBuilder();
-  _writeCompactU16(builder, signatures.length);
-  for (final signature in signatures) {
-    builder.add(signature);
-  }
-  builder.add(message);
-  return builder.toBytes();
-}
-
-/// Writes [value] as a Solana compact-u16 (shortvec length): 7 bits per byte,
-/// little-endian, with the high bit marking continuation. Signature counts are tiny, but
-/// encoding it correctly keeps the wire format valid rather than assuming a single byte.
-void _writeCompactU16(BytesBuilder builder, int value) {
-  var remaining = value;
-  while (true) {
-    final byte = remaining & 0x7f;
-    remaining >>= 7;
-    if (remaining == 0) {
-      builder.addByte(byte);
-      return;
-    }
-    builder.addByte(byte | 0x80);
-  }
-}
-
-/// Generates a random 128-bit idempotency key as lowercase hex. A distinct key per call
-/// keeps sends independent; a caller who wants retry safety can supply their own.
-String _newIdempotencyKey() {
-  final random = Random.secure();
-  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-  return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-}
-
-/// Builds a [TxRecord] from a backend history record. A `null` mint denotes the chain's
-/// native asset; amounts are decimal strings in base units.
-TxRecord _txRecordFromJson(Map<String, dynamic> json, Chain chain) {
-  final mint = json['mint'] as String?;
-  return TxRecord(
-    signature: json['signature'] as String,
-    status: json['status'] as String,
-    to: (json['to'] as String?) ?? '',
-    amount: BigInt.tryParse((json['amount'] as String?) ?? '0') ?? BigInt.zero,
-    asset: mint == null
-        ? Asset.native(chain)
-        : Asset(chain: chain, mint: mint, decimals: 0),
-    createdAt: DateTime.parse(json['created_at'] as String),
-  );
-}
-
-/// Translates a backend commitment string (`processed` | `confirmed` | `finalized` |
-/// `failed`) into a [TxStatus] for the transaction identified by [handle].
-TxStatus _statusFromBackend(TxHandle handle, String raw) {
-  switch (raw) {
-    case 'finalized':
-      return TxStatus(
-        handle: handle,
-        state: 'finalized',
-        commitment: TxCommitment.finalized,
-        signature: handle.id,
-      );
-    case 'confirmed':
-      return TxStatus(
-        handle: handle,
-        state: 'confirmed',
-        commitment: TxCommitment.confirmed,
-        signature: handle.id,
-      );
-    case 'failed':
-      return TxStatus(
-        handle: handle,
-        state: 'failed',
-        signature: handle.id,
-        error: const ChainRejected('transaction failed on-chain'),
-      );
-    case 'processed':
-    default:
-      return TxStatus(
-        handle: handle,
-        state: 'pending',
-        commitment: TxCommitment.processed,
-        signature: handle.id,
-      );
-  }
-}
-
-/// Maps a native secure-element failure to a typed [XendError]. A cancelled biometric
-/// prompt is the case callers branch on; other device failures surface as a retryable
-/// [NetworkError], since they mean the operation did not complete.
-XendError _mapNativeError(PlatformException e) {
-  switch (e.code) {
-    case 'user_cancelled_auth':
-      return const UserCancelledAuth();
-    case 'invalid_mnemonic':
-      return const InvalidRecoveryPhrase();
-    case 'biometrics_unavailable':
-      return const NetworkError(
-          'Biometric authentication is unavailable on this device');
-    default:
-      return NetworkError('secure element error: ${e.message ?? e.code}');
   }
 }
