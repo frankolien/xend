@@ -657,4 +657,24 @@ mod tests {
         assert_eq!(transfer.accounts.len(), 4);
         assert!(transfer.accounts[3].is_signer, "owner authorizes the transfer");
     }
+
+    /// `map_send_error` classifies RPC send errors so the SDK can react. Misclassifying an
+    /// expired blockhash as terminal would stop the client from rebuilding and retrying.
+    #[test]
+    fn send_errors_are_classified() {
+        let expired = serde_json::json!({ "message": "Blockhash not found" });
+        assert!(matches!(map_send_error(&expired), AppError::BlockhashExpired));
+
+        let height = serde_json::json!({ "message": "block height exceeded" });
+        assert!(matches!(map_send_error(&height), AppError::BlockhashExpired));
+
+        let broke = serde_json::json!({ "message": "Attempt to debit an account but found no record of a prior credit. insufficient funds" });
+        assert!(matches!(map_send_error(&broke), AppError::InsufficientFunds));
+
+        let other = serde_json::json!({ "message": "custom program error: 0x1" });
+        match map_send_error(&other) {
+            AppError::ChainRejected(msg) => assert_eq!(msg, "custom program error: 0x1"),
+            e => panic!("expected ChainRejected, got {e:?}"),
+        }
+    }
 }
