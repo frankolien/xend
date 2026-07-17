@@ -16,6 +16,7 @@ export 'src/errors.dart'
         InsufficientFunds,
         UserCancelledAuth,
         BlockhashExpired,
+        IdempotencyKeyReuse,
         InvalidRecipient,
         InvalidRecoveryPhrase,
         RateLimited,

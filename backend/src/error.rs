@@ -30,6 +30,9 @@ pub enum AppError {
     #[error("blockhash expired")]
     BlockhashExpired,
 
+    #[error("idempotency key already used for a different transaction")]
+    IdempotencyKeyReuse,
+
     #[error("chain rejected: {0}")]
     ChainRejected(String),
 
@@ -52,6 +55,7 @@ impl IntoResponse for AppError {
             AppError::InsufficientFunds => (StatusCode::UNPROCESSABLE_ENTITY, "insufficient_funds"),
             AppError::InvalidRecipient => (StatusCode::UNPROCESSABLE_ENTITY, "invalid_recipient"),
             AppError::BlockhashExpired => (StatusCode::CONFLICT, "blockhash_expired"),
+            AppError::IdempotencyKeyReuse => (StatusCode::CONFLICT, "idempotency_key_reuse"),
             AppError::ChainRejected(_) => (StatusCode::UNPROCESSABLE_ENTITY, "chain_rejected"),
             AppError::Network(_) => (StatusCode::BAD_GATEWAY, "network"),
             AppError::Database(_) | AppError::Internal(_) => {

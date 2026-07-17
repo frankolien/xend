@@ -176,6 +176,8 @@ class BackendClient {
         return const InvalidRecipient();
       case 'blockhash_expired':
         return const BlockhashExpired();
+      case 'idempotency_key_reuse':
+        return const IdempotencyKeyReuse();
       case 'chain_rejected':
         return ChainRejected(message);
       case 'rate_limited':

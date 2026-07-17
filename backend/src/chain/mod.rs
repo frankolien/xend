@@ -5,5 +5,5 @@
 mod adapter;
 mod solana;
 
-pub use adapter::{ChainAdapter, Commitment, TransferIntent};
+pub use adapter::{ChainAdapter, Commitment, TransferIntent, UnsignedTx};
 pub use solana::SolanaAdapter;

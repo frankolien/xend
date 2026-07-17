@@ -62,6 +62,19 @@ final class InvalidRecipient extends XendError {
   const InvalidRecipient([super.message = 'Invalid recipient address']);
 }
 
+/// The idempotency key was already used for a different transaction.
+///
+/// A key stands for exactly one transaction, so submitting different signed bytes under a
+/// key that is already taken is refused rather than sent. Nothing was broadcast, and the
+/// transaction the key already refers to is unaffected.
+///
+/// Terminal: retrying cannot help. Build the transaction again under a fresh key.
+final class IdempotencyKeyReuse extends XendError {
+  const IdempotencyKeyReuse(
+      [super.message =
+          'Idempotency key already used for a different transaction']);
+}
+
 /// The request was rejected because a rate limit was exceeded.
 final class RateLimited extends XendError {
   const RateLimited(this.retryAfter, [String? message])

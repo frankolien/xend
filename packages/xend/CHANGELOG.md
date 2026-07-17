@@ -20,6 +20,9 @@ First public pre-release. **Solana + iOS, devnet. Not audited — do not use wit
 - `.sol` name resolution: `send(to: 'gift.sol', ...)` and `XendWallet.resolveName`.
 - `balance` (SOL or SPL), `history`, and `watch` (pending → confirmed → finalized).
 - `sign` arbitrary messages for wallet-based login.
+- Exactly-once submission: an idempotency key is bound to the transaction it was claimed
+  with, so a retry returns the original signature, and a key reused for different bytes is
+  rejected (`IdempotencyKeyReuse`) instead of broadcast as a second transfer.
 
 ### Foundation
 - `Xend.configure` / `XendConfig` (backend URL + optional API key).

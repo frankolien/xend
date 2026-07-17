@@ -133,6 +133,22 @@ void main() {
       );
     });
 
+    test('idempotency_key_reuse -> IdempotencyKeyReuse', () {
+      final client = _client((req) async => _json(
+            {
+              'error': {
+                'code': 'idempotency_key_reuse',
+                'message': 'already used'
+              }
+            },
+            status: 409,
+          ));
+      expect(
+        client.submitTransaction(signed: 'S', idempotencyKey: 'K'),
+        throwsA(isA<IdempotencyKeyReuse>()),
+      );
+    });
+
     test('unknown error code -> NetworkError', () {
       final client = _client(
         (req) async => _json({

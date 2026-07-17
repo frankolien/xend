@@ -8,53 +8,55 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-/// Idempotency-relevant fields of a stored transaction.
-pub struct Existing {
-    /// On-chain signature, or `None` if the row was claimed but not yet broadcast.
+/// The row an idempotency key resolves to, whether this caller claimed it or found it
+/// already held.
+pub struct Claim {
+    /// Hash of the signed payload the key was claimed with. `None` for rows written before
+    /// the column existed, which count as unbound.
+    pub signed_hash: Option<String>,
+    /// On-chain signature, or `None` if the key is claimed but not yet broadcast.
     pub signature: Option<String>,
     /// Lifecycle state.
     pub status: String,
 }
 
-/// Looks up a transaction by its idempotency key.
-pub async fn find_by_idempotency(
-    pool: &PgPool,
-    idempotency_key: &str,
-) -> Result<Option<Existing>, AppError> {
-    let row: Option<(Option<String>, String)> =
-        sqlx::query_as("select signature, status from transactions where idempotency_key = $1")
-            .bind(idempotency_key)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|(signature, status)| Existing { signature, status }))
-}
-
-/// Claims an idempotency key by inserting a pending row. The UNIQUE constraint plus
-/// `on conflict do nothing` collapse concurrent claims for the same key to a single row.
-/// A caller that loses the race is still safe: re-broadcasting identical signed bytes
-/// yields the same on-chain signature.
-pub async fn insert_pending(
+/// Claims an idempotency key for `signed_hash`, or returns the row already holding it.
+///
+/// The insert and the read are one statement, so two concurrent submissions of the same key
+/// cannot both come away believing they claimed it: the UNIQUE constraint picks a winner and
+/// the loser reads the winner's row back. `do update` rather than `do nothing` because only
+/// the former returns a row on conflict.
+pub async fn claim_or_get(
     pool: &PgPool,
     wallet_id: Option<Uuid>,
     idempotency_key: &str,
+    signed_hash: &str,
     to: Option<&str>,
     amount: Option<&str>,
     mint: Option<&str>,
-) -> Result<(), AppError> {
-    sqlx::query(
-        "insert into transactions (id, wallet_id, idempotency_key, status, to_address, amount, mint)
-         values ($1, $2, $3, 'pending', $4, $5, $6)
-         on conflict (idempotency_key) do nothing",
-    )
-    .bind(Uuid::new_v4())
-    .bind(wallet_id)
-    .bind(idempotency_key)
-    .bind(to)
-    .bind(amount)
-    .bind(mint)
-    .execute(pool)
-    .await?;
-    Ok(())
+) -> Result<Claim, AppError> {
+    let (signed_hash, signature, status): (Option<String>, Option<String>, String) =
+        sqlx::query_as(
+            "insert into transactions (id, wallet_id, idempotency_key, status, to_address, amount, mint, signed_hash)
+             values ($1, $2, $3, 'pending', $4, $5, $6, $7)
+             on conflict (idempotency_key) do update set updated_at = now()
+             returning signed_hash, signature, status",
+        )
+        .bind(Uuid::new_v4())
+        .bind(wallet_id)
+        .bind(idempotency_key)
+        .bind(to)
+        .bind(amount)
+        .bind(mint)
+        .bind(signed_hash)
+        .fetch_one(pool)
+        .await?;
+
+    Ok(Claim {
+        signed_hash,
+        signature,
+        status,
+    })
 }
 
 /// A broadcast transaction as recorded in the ledger, used for history.
