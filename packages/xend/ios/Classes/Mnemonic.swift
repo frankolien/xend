@@ -11,6 +11,7 @@ enum Mnemonic {
         case invalidWordCount
         case unknownWord(String)
         case invalidChecksum
+        case randomFailed(OSStatus)
     }
 
     /// Word-to-position index, built once from the wordlist.
@@ -25,10 +26,14 @@ enum Mnemonic {
     // MARK: - Generation & validation
 
     /// Generates a fresh 12-word mnemonic from 128 bits of cryptographically secure entropy.
-    static func generate() -> String {
-        var entropy = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, entropy.count, &entropy)
-        return encode(entropy: Data(entropy))
+    static func generate() throws -> String {
+        var entropy = Data(count: 16)
+        defer { entropy.zeroize() }
+        let status = entropy.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
+        }
+        guard status == errSecSuccess else { throw MnemonicError.randomFailed(status) }
+        return encode(entropy: entropy)
     }
 
     /// Encodes `entropy` as a mnemonic: append the checksum (the first ENT/32 bits of
@@ -91,7 +96,9 @@ enum Mnemonic {
     /// Derives the Solana signing key, a 32-byte ed25519 seed, from `mnemonic` along
     /// `m/44'/501'/0'/0'`.
     static func solanaPrivateKey(from mnemonic: String, passphrase: String = "") -> Data {
-        solanaPrivateKey(fromSeed: seed(from: mnemonic, passphrase: passphrase))
+        var seed = seed(from: mnemonic, passphrase: passphrase)
+        defer { seed.zeroize() }
+        return solanaPrivateKey(fromSeed: seed)
     }
 
     /// The BIP-39 seed: PBKDF2-HMAC-SHA512 over the mnemonic with salt "mnemonic"+passphrase
@@ -107,14 +114,22 @@ enum Mnemonic {
     static func solanaPrivateKey(fromSeed seed: Data) -> Data {
         var node = slip10Master(seed)
         for index in [44, 501, 0, 0] {
-            node = slip10DeriveHardened(node, index: UInt32(index))
+            var parent = node
+            node = slip10DeriveHardened(parent, index: UInt32(index))
+            parent.wipe()
         }
+        node.chainCode.zeroize()
         return node.key
     }
 
     private struct Slip10Node {
-        let key: Data
-        let chainCode: Data
+        var key: Data
+        var chainCode: Data
+
+        mutating func wipe() {
+            key.zeroize()
+            chainCode.zeroize()
+        }
     }
 
     private static func slip10Master(_ seed: Data) -> Slip10Node {
@@ -129,6 +144,7 @@ enum Mnemonic {
     private static func slip10DeriveHardened(_ node: Slip10Node, index: UInt32) -> Slip10Node {
         let hardened = index | 0x8000_0000
         var data = Data([0x00])
+        defer { data.zeroize() }
         data.append(node.key)
         data.append(contentsOf: withUnsafeBytes(of: hardened.bigEndian) { Data($0) })
 
@@ -157,8 +173,11 @@ enum Mnemonic {
                 for i in 0..<result.count { result[i] ^= u[i] }
             }
             output.append(result)
+            u.zeroize()
+            result.zeroize()
             blockIndex += 1
         }
+        defer { output.zeroize() }
         return Data(output.prefix(length))
     }
 
@@ -175,5 +194,29 @@ enum Mnemonic {
     /// wordlist, but needed for correctness with imported phrases and passphrases.
     private static func normalize(_ text: String) -> String {
         text.decomposedStringWithCompatibilityMapping
+    }
+}
+
+// MARK: - Zeroizing
+
+// Best-effort wiping of secret buffers. Swift may already have made copies we can't reach,
+// but this clears the ones we own.
+extension Data {
+    mutating func zeroize() {
+        let length = count
+        guard length > 0 else { return }
+        withUnsafeMutableBytes { buffer in
+            if let base = buffer.baseAddress { _ = memset_s(base, length, 0, length) }
+        }
+    }
+}
+
+extension Array where Element == UInt8 {
+    mutating func zeroize() {
+        let length = count
+        guard length > 0 else { return }
+        withUnsafeMutableBytes { buffer in
+            if let base = buffer.baseAddress { _ = memset_s(base, length, 0, length) }
+        }
     }
 }
