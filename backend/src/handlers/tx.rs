@@ -9,6 +9,10 @@
 //! is harmless only for *identical* bytes, which carry an identical signature the network
 //! collapses into one transaction. The same key over different bytes is a different
 //! transfer, so submit rejects it instead of moving funds twice.
+//!
+//! History is recorded from the signed transaction, not from the request. The sender,
+//! recipient, amount and mint come from the bytes; client-supplied values are only checked
+//! against them, and a mismatch is rejected.
 
 use axum::{
     extract::{Path, State},
@@ -18,7 +22,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::chain::{Commitment, TransferIntent};
+use crate::chain::{Commitment, SignedTransfer, TransferIntent};
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::store;
@@ -91,13 +95,13 @@ pub struct SubmitRequest {
     pub signed: String,
     /// Client-supplied key that makes a retry safe: a duplicate does not re-broadcast.
     pub idempotency_key: String,
-    /// Sender address, used to associate the transaction with a registered wallet.
+    /// Sender address. Optional; if present it must match the signed transaction.
     pub pubkey: Option<String>,
-    /// Recipient address, recorded for history.
+    /// Recipient address. Optional; if present it must match the signed transaction.
     pub to: Option<String>,
-    /// Amount in base units as a decimal string, recorded for history.
+    /// Amount in base units as a decimal string. Optional; checked like `pubkey`.
     pub amount: Option<String>,
-    /// Token mint, or omitted/null for the native asset.
+    /// Token mint. Optional; checked like `pubkey`. Omitted for the native asset.
     pub mint: Option<String>,
 }
 
@@ -126,9 +130,26 @@ pub async fn submit(
     // Ties the key to this exact payload, so a retry has to present the same bytes.
     let signed_hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&signed));
 
-    let wallet_id = match &req.pubkey {
-        Some(pubkey) => store::wallets::find_id_by_pubkey(&state.pool, pubkey).await?,
-        None => None,
+    // Verify signatures and read what the transaction really does before anything is
+    // claimed or recorded. Pure and local, so repeating it on a retry is harmless.
+    let transfer = state
+        .chain
+        .validate_signed(&signed, req.to.as_deref())
+        .await?;
+
+    // Recorded fields come from the bytes. A transaction that is not a recognised transfer
+    // is still relayed but not attached to any wallet's history.
+    let (wallet_id, to, amount, mint) = match &transfer {
+        Some(t) => {
+            check_claims(&req, t)?;
+            (
+                store::wallets::find_id_by_pubkey(&state.pool, &t.from).await?,
+                t.to.clone(),
+                Some(t.amount.to_string()),
+                t.mint.clone(),
+            )
+        }
+        None => (None, None, None, None),
     };
 
     let claim = store::transactions::claim_or_get(
@@ -136,9 +157,9 @@ pub async fn submit(
         wallet_id,
         &req.idempotency_key,
         &signed_hash,
-        req.to.as_deref(),
-        req.amount.as_deref(),
-        req.mint.as_deref(),
+        to.as_deref(),
+        amount.as_deref(),
+        mint.as_deref(),
     )
     .await?;
 
@@ -160,8 +181,6 @@ pub async fn submit(
     // died before it reached the network. The payload matches, so broadcasting now is safe
     // even if that attempt did get through: identical bytes carry the identical signature,
     // which the network treats as the same transaction.
-    state.chain.validate_signed(&signed).await?;
-
     let signature = state.chain.broadcast(&signed).await?;
     store::transactions::mark_submitted(&state.pool, &req.idempotency_key, &signature).await?;
 
@@ -169,6 +188,30 @@ pub async fn submit(
         signature,
         status: "submitted".to_string(),
     }))
+}
+
+/// Rejects a request whose optional transfer fields disagree with the signed transaction.
+fn check_claims(req: &SubmitRequest, actual: &SignedTransfer) -> Result<(), AppError> {
+    let mismatch = |field: &str| {
+        Err(AppError::BadRequest(format!(
+            "`{field}` does not match the signed transaction"
+        )))
+    };
+    if matches!(&req.pubkey, Some(p) if *p != actual.from) {
+        return mismatch("pubkey");
+    }
+    if req.to.is_some() && req.to != actual.to {
+        return mismatch("to");
+    }
+    if let Some(amount) = &req.amount {
+        if amount.parse::<u128>().ok() != Some(actual.amount) {
+            return mismatch("amount");
+        }
+    }
+    if req.mint.is_some() && req.mint != actual.mint {
+        return mismatch("mint");
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -235,8 +278,19 @@ mod tests {
             unimplemented!("submit tests do not resolve")
         }
 
-        async fn validate_signed(&self, _signed: &[u8]) -> Result<(), AppError> {
-            Ok(())
+        /// Every payload reads back as the same transfer, so tests can check that history
+        /// comes from here rather than from the request.
+        async fn validate_signed(
+            &self,
+            _signed: &[u8],
+            _claimed_to: Option<&str>,
+        ) -> Result<Option<SignedTransfer>, AppError> {
+            Ok(Some(SignedTransfer {
+                from: "sender".to_string(),
+                to: Some("recipient".to_string()),
+                amount: 1000,
+                mint: None,
+            }))
         }
 
         /// Mirrors the property the whole guarantee rests on: a signature is a function of
@@ -399,5 +453,54 @@ mod tests {
             .expect("second");
 
         assert_eq!(chain.broadcast_count(), 2);
+    }
+
+    /// A request cannot write history the signed bytes do not back.
+    #[sqlx::test]
+    async fn submit_rejects_claims_that_contradict_the_signed_transaction(pool: PgPool) {
+        let chain = Arc::new(MockChain::default());
+        let state = state_for(pool.clone(), chain.clone());
+
+        let mut forged_amount = request(b"tx", "key-1");
+        forged_amount.amount = Some("999999".to_string());
+        let mut forged_to = request(b"tx", "key-2");
+        forged_to.to = Some("someone-else".to_string());
+        let mut forged_from = request(b"tx", "key-3");
+        forged_from.pubkey = Some("victim".to_string());
+
+        for forged in [forged_amount, forged_to, forged_from] {
+            let result = submit(State(state.clone()), Json(forged)).await;
+            assert!(matches!(result, Err(AppError::BadRequest(_))));
+        }
+        assert_eq!(chain.broadcast_count(), 0);
+        let rows: i64 = sqlx::query_scalar("select count(*) from transactions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "a rejected submit leaves no ledger row");
+    }
+
+    /// With no claims at all, the recorded row still carries the transfer's real details.
+    #[sqlx::test]
+    async fn submit_records_history_from_the_signed_transaction(pool: PgPool) {
+        let chain = Arc::new(MockChain::default());
+        let state = state_for(pool.clone(), chain.clone());
+        let wallet = store::wallets::upsert(&pool, "sender", None).await.unwrap();
+
+        let mut bare = request(b"tx", "key-1");
+        bare.to = None;
+        bare.amount = None;
+        let _ = submit(State(state), Json(bare)).await.expect("submit");
+
+        let (wallet_id, to, amount): (Option<uuid::Uuid>, Option<String>, Option<String>) =
+            sqlx::query_as(
+                "select wallet_id, to_address, amount from transactions where idempotency_key = 'key-1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(wallet_id, Some(wallet));
+        assert_eq!(to.as_deref(), Some("recipient"));
+        assert_eq!(amount.as_deref(), Some("1000"));
     }
 }

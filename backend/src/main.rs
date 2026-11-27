@@ -65,6 +65,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(%addr, "xend-backend listening");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app::router(state, gateway)).await?;
+    // Peer address is exposed to handlers so the rate limiter can key by IP when API-key
+    // auth is disabled.
+    axum::serve(
+        listener,
+        app::router(state, gateway)
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
