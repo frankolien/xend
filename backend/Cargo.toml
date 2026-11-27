@@ -25,3 +25,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 # Solana RPC/WSS client — the ONLY component holding RPC credentials. Pinned + audited.
 # solana-client = "..."   # wired in Phase 2 (kept out until the signing path lands)
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] } # drive the router in tests without a server

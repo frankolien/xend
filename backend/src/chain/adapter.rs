@@ -39,6 +39,20 @@ pub struct TransferIntent {
     pub mint: Option<String>,
 }
 
+/// What a signed transaction actually does, read from its bytes rather than from the
+/// client. Used to record history so a caller cannot write entries the transaction does
+/// not back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedTransfer {
+    /// The account that authorized the transfer (a required signer).
+    pub from: String,
+    /// Recipient wallet. `None` when the transaction does not reveal it (a token transfer
+    /// to an existing account, with no recipient claim to check against).
+    pub to: Option<String>,
+    pub amount: u128,
+    pub mint: Option<String>,
+}
+
 /// The interface every supported chain implements.
 ///
 /// `build_transfer` assembles an unsigned transfer, fetching data the device should not
@@ -60,9 +74,16 @@ pub trait ChainAdapter: Send + Sync {
     /// [`AppError::InvalidRecipient`] when the name is malformed or unregistered.
     async fn resolve_name(&self, name: &str) -> Result<String, AppError>;
 
-    /// Validates a signed payload before broadcast: well-formed, signature present, and
-    /// consistent with the intent it was built from.
-    async fn validate_signed(&self, signed: &[u8]) -> Result<(), AppError>;
+    /// Validates a signed payload before broadcast (well-formed, every signature valid)
+    /// and reports the transfer it performs. Returns `Ok(None)` for a valid transaction
+    /// that is not a single recognised transfer; it can still be relayed but is not
+    /// recorded as one. `claimed_to` is the client's recipient, used only where the bytes
+    /// alone cannot name the recipient and only if it checks out against them.
+    async fn validate_signed(
+        &self,
+        signed: &[u8],
+        claimed_to: Option<&str>,
+    ) -> Result<Option<SignedTransfer>, AppError>;
 
     /// Broadcasts already-signed bytes and returns the network transaction signature.
     async fn broadcast(&self, signed: &[u8]) -> Result<String, AppError>;
