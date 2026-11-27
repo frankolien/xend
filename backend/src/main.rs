@@ -61,7 +61,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState { pool, chain };
     let gateway = gateway::Gateway::from_env();
 
-    let addr = env::var("XEND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    // XEND_ADDR wins; otherwise bind the PORT a host like Railway assigns; else 8080.
+    let addr = env::var("XEND_ADDR").unwrap_or_else(|_| {
+        let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+        format!("0.0.0.0:{port}")
+    });
     tracing::info!(%addr, "xend-backend listening");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
