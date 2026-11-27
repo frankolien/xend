@@ -32,8 +32,9 @@ public class XendSecurePlugin: NSObject, FlutterPlugin {
         let args = call.arguments as? [String: Any] ?? [:]
         switch call.method {
         case "generateKeyPair":
-            let result = try signer.generateKeyPair(walletId: try string(args, "walletId"))
-            return ["address": result.address, "mnemonic": result.mnemonic]
+            // The phrase stays on the native side; the app reads it via revealMnemonic.
+            let address = try signer.generateKeyPair(walletId: try string(args, "walletId"))
+            return ["address": address]
 
         case "restore":
             let walletId = try string(args, "walletId")
@@ -61,7 +62,8 @@ public class XendSecurePlugin: NSObject, FlutterPlugin {
             return FlutterStandardTypedData(bytes: sig)
 
         case "deleteKey":
-            try signer.deleteKey(walletId: try string(args, "walletId"))
+            let wipeBackup = args["wipeBackup"] as? Bool ?? false
+            try signer.deleteKey(walletId: try string(args, "walletId"), wipeBackup: wipeBackup)
             return nil
 
         default:
@@ -87,6 +89,12 @@ public class XendSecurePlugin: NSObject, FlutterPlugin {
             return FlutterError(code: "biometrics_unavailable", message: "Biometrics unavailable", details: nil)
         case .keyNotFound:
             return FlutterError(code: "key_not_found", message: "No key for wallet", details: nil)
+        case .keyInvalidated:
+            return FlutterError(
+                code: "key_invalidated",
+                message: "Signing key was invalidated (biometrics changed); restore or recover the wallet",
+                details: nil
+            )
         case .badArguments(let k):
             return FlutterError(code: "bad_arguments", message: "Missing/invalid argument: \(k)", details: nil)
         case .badPublicKeyData:
