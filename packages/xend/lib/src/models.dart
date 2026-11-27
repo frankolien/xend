@@ -146,3 +146,42 @@ class TxRecord {
   /// When the transaction was created.
   final DateTime createdAt;
 }
+
+/// What a transfer will do, passed to the `confirm` callback of [XendWallet.send] after
+/// the transaction has been checked against the request and before it is signed.
+///
+/// The biometric prompt shows no transaction details, so this is the app's chance to show
+/// them and let the user decline.
+class TransferPreview {
+  const TransferPreview({
+    required this.recipient,
+    this.recipientName,
+    required this.amount,
+    required this.asset,
+    this.mint,
+    this.decimals,
+    required this.sponsored,
+  });
+
+  /// The recipient's address, as it appears in the transaction.
+  final String recipient;
+
+  /// The name the recipient was given as, such as `gift.sol`, or null if an address was
+  /// passed.
+  final String? recipientName;
+
+  /// The amount, in the asset's smallest indivisible unit.
+  final BigInt amount;
+
+  /// The asset being sent.
+  final Asset asset;
+
+  /// The token mint, or null for the native asset.
+  final String? mint;
+
+  /// The token's decimals as encoded in the transfer, or null for the native asset.
+  final int? decimals;
+
+  /// Whether a fee payer other than the user covers network fees.
+  final bool sponsored;
+}

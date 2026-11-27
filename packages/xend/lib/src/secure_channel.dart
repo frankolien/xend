@@ -8,18 +8,14 @@ class SecureChannel {
 
   static const MethodChannel _channel = MethodChannel('ai.xend/secure');
 
-  /// Generates a new key pair and its recovery phrase on-device. Returns the base58
-  /// [address] and the BIP-39 [mnemonic] (shown once for the user to back up).
-  Future<({String address, String mnemonic})> generateKeyPair(
-      String walletId) async {
+  /// Generates a new key pair on-device and returns its base58 [address]. The recovery
+  /// phrase stays on the device; read it with [revealMnemonic].
+  Future<({String address})> generateKeyPair(String walletId) async {
     final result = await _channel.invokeMapMethod<String, dynamic>(
       'generateKeyPair',
       {'walletId': walletId},
     );
-    return (
-      address: result!['address'] as String,
-      mnemonic: result['mnemonic'] as String,
-    );
+    return (address: result!['address'] as String);
   }
 
   /// Restores a wallet from its recovery phrase on-device, returning the base58 address.
@@ -67,6 +63,11 @@ class SecureChannel {
     return sig!;
   }
 
-  Future<void> deleteKey(String walletId) =>
-      _channel.invokeMethod<void>('deleteKey', {'walletId': walletId});
+  /// Deletes the wallet's key from this device. With [wipeBackup], also deletes the
+  /// synced recovery seed, which removes the wallet from every device.
+  Future<void> deleteKey(String walletId, {bool wipeBackup = false}) =>
+      _channel.invokeMethod<void>(
+        'deleteKey',
+        {'walletId': walletId, 'wipeBackup': wipeBackup},
+      );
 }

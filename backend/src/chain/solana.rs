@@ -13,8 +13,56 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk::transaction::Transaction;
 
-use super::adapter::{ChainAdapter, Commitment, TransferIntent, UnsignedTx};
+use super::{ChainAdapter, Commitment, SignedTransfer, TransferIntent, UnsignedTx};
 use crate::error::AppError;
+use crate::gateway::rate_limit::RateLimiter;
+
+/// Sponsored builds allowed per sender wallet per hour.
+const SPONSORED_BUILDS_PER_SENDER_PER_HOUR: u32 = 60;
+/// Recipient token accounts the paymaster will fund per sender wallet per day.
+const SPONSORED_ATAS_PER_SENDER_PER_DAY: u32 = 10;
+/// Recipient token accounts the paymaster will fund across all senders per hour. At about
+/// 0.002 SOL rent each this bounds the worst case to roughly 0.4 SOL an hour.
+const SPONSORED_ATAS_GLOBAL_PER_HOUR: u32 = 200;
+
+/// In-memory caps on what the paymaster pays for. Per-sender caps stop one wallet from
+/// looping builds; the global cap on account creation covers senders rotating through
+/// fresh wallets, which per-sender limits cannot see.
+///
+/// Residual risk: rent funded for a new recipient token account can be reclaimed by its
+/// owner by closing the account, so up to the global cap per hour can still be extracted.
+/// The counters are per process and reset on restart. A production deployment should tie
+/// sponsorship to an authenticated user or API key budget and keep counters in a shared
+/// store.
+struct SponsorLimits {
+    builds_per_sender: RateLimiter,
+    atas_per_sender: RateLimiter,
+    atas_global: RateLimiter,
+}
+
+impl SponsorLimits {
+    fn new() -> Self {
+        const HOUR: Duration = Duration::from_secs(3600);
+        Self {
+            builds_per_sender: RateLimiter::new(SPONSORED_BUILDS_PER_SENDER_PER_HOUR, HOUR),
+            atas_per_sender: RateLimiter::new(SPONSORED_ATAS_PER_SENDER_PER_DAY, HOUR * 24),
+            atas_global: RateLimiter::new(SPONSORED_ATAS_GLOBAL_PER_HOUR, HOUR),
+        }
+    }
+
+    fn allow_build(&self, sender: &Pubkey) -> Result<(), AppError> {
+        self.builds_per_sender
+            .record(&sender.to_string())
+            .map_err(|retry_after_secs| AppError::RateLimited { retry_after_secs })
+    }
+
+    fn allow_ata_creation(&self, sender: &Pubkey) -> Result<(), AppError> {
+        self.atas_per_sender
+            .record(&sender.to_string())
+            .and_then(|()| self.atas_global.record("global"))
+            .map_err(|retry_after_secs| AppError::RateLimited { retry_after_secs })
+    }
+}
 
 /// Solana implementation of [`ChainAdapter`]. Holds the RPC endpoint and an HTTP client
 /// for JSON-RPC calls.
@@ -31,6 +79,7 @@ pub struct SolanaAdapter {
     sns_rpc_url: String,
     http: reqwest::Client,
     fee_payer: Option<Keypair>,
+    sponsor_limits: SponsorLimits,
 }
 
 impl SolanaAdapter {
@@ -44,6 +93,7 @@ impl SolanaAdapter {
             sns_rpc_url: sns_rpc_url.into(),
             http: reqwest::Client::new(),
             fee_payer,
+            sponsor_limits: SponsorLimits::new(),
         }
     }
 
@@ -92,11 +142,23 @@ impl ChainAdapter for SolanaAdapter {
         // Fee payer is the paymaster when fees are sponsored, otherwise the sender. It pays
         // the network fee and funds any account rent (a new associated token account), so a
         // sponsored user needs no SOL.
-        let payer = self
-            .fee_payer
-            .as_ref()
-            .map(|k| k.pubkey())
-            .unwrap_or(from);
+        let sponsor = self.fee_payer.as_ref().map(|k| k.pubkey());
+        let payer = sponsor.unwrap_or(from);
+
+        if let Some(sponsor) = sponsor {
+            // With the paymaster as sender, its co-signature would be the only one the
+            // transfer needs, so anyone could move its funds. Sending to it is refused too:
+            // it keeps the paymaster out of every role except fee payer.
+            if from == sponsor {
+                return Err(AppError::BadRequest(
+                    "sender cannot be the fee payer account".into(),
+                ));
+            }
+            if to == sponsor {
+                return Err(AppError::InvalidRecipient);
+            }
+            self.sponsor_limits.allow_build(&from)?;
+        }
 
         // Native transfer is one System instruction. Token transfer is an idempotent
         // "create recipient's associated token account" followed by a checked transfer
@@ -112,17 +174,38 @@ impl ChainAdapter for SolanaAdapter {
                 let decimals = self.mint_decimals(&mint).await?;
                 let source_ata = associated_token_address(&from, &mint);
                 let dest_ata = associated_token_address(&to, &mint);
-                vec![
-                    // Fee payer funds the recipient's token account so token sends are
-                    // gasless too; the transfer is still authorized by `from`.
-                    create_ata_idempotent(&payer, &to, &mint, &dest_ata),
-                    token_transfer_checked(&source_ata, &mint, &dest_ata, &from, amount, decimals),
-                ]
+                let transfer =
+                    token_transfer_checked(&source_ata, &mint, &dest_ata, &from, amount, decimals);
+
+                // Fee payer funds the recipient's token account so token sends are gasless
+                // too; the transfer is still authorized by `from`. When sponsored, the
+                // create is only included if the account is missing, and each one counts
+                // against the rent caps.
+                let needs_create = match sponsor {
+                    Some(_) => !self.account_exists(&dest_ata).await?,
+                    None => true,
+                };
+                if needs_create {
+                    if sponsor.is_some() {
+                        self.sponsor_limits.allow_ata_creation(&from)?;
+                    }
+                    vec![create_ata_idempotent(&payer, &to, &mint, &dest_ata), transfer]
+                } else {
+                    vec![transfer]
+                }
             }
         };
 
         let blockhash = self.latest_blockhash().await?;
         let message = Message::new_with_blockhash(&instructions, Some(&payer), &blockhash);
+
+        // Last line of defence before the paymaster signs anything: the message must use it
+        // only as fee payer and ATA rent funder.
+        if let Some(sponsor) = &sponsor {
+            check_sponsored_message(&message, sponsor).inspect_err(|e| {
+                tracing::warn!(error = %e, from = %from, "refused to co-sign a sponsored message");
+            })?;
+        }
         let message_bytes = message.serialize();
 
         // Co-sign the fee-payer slot now so the device only adds its own signature. Both
@@ -152,7 +235,11 @@ impl ChainAdapter for SolanaAdapter {
         Ok(owner.to_string())
     }
 
-    async fn validate_signed(&self, signed: &[u8]) -> Result<(), AppError> {
+    async fn validate_signed(
+        &self,
+        signed: &[u8],
+        claimed_to: Option<&str>,
+    ) -> Result<Option<SignedTransfer>, AppError> {
         // Parse the wire-format transaction and verify every signature against the message
         // it signs. Rejects a malformed payload or tampered message locally, before it is
         // relayed to the network.
@@ -160,7 +247,7 @@ impl ChainAdapter for SolanaAdapter {
             .map_err(|e| AppError::BadRequest(format!("malformed signed transaction: {e}")))?;
         tx.verify()
             .map_err(|_| AppError::BadRequest("transaction signature verification failed".into()))?;
-        Ok(())
+        Ok(summarize_transfer(&tx.message, claimed_to))
     }
 
     async fn broadcast(&self, signed: &[u8]) -> Result<String, AppError> {
@@ -247,6 +334,37 @@ impl ChainAdapter for SolanaAdapter {
 }
 
 impl SolanaAdapter {
+    /// Whether an account exists, via `getAccountInfo` with an empty data slice.
+    async fn account_exists(&self, address: &Pubkey) -> Result<bool, AppError> {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [
+                address.to_string(),
+                { "encoding": "base64", "commitment": "confirmed", "dataSlice": { "offset": 0, "length": 0 } }
+            ],
+        });
+
+        let response = self
+            .http
+            .post(&self.rpc_url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Network(format!("rpc request failed: {e}")))?;
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AppError::Network(format!("rpc decode failed: {e}")))?;
+
+        if let Some(error) = body.get("error") {
+            return Err(AppError::Network(format!("getAccountInfo failed: {error}")));
+        }
+        Ok(!body["result"]["value"].is_null())
+    }
+
     /// Native SOL balance in lamports, via `getBalance`.
     async fn native_balance(&self, address: &str) -> Result<u128, AppError> {
         let request = serde_json::json!({
@@ -516,6 +634,133 @@ fn token_transfer_checked(
     }
 }
 
+/// Checks a message before the paymaster co-signs it. The fee payer may appear only at
+/// account index 0 and, inside instructions, only as the funding account (position 0) of a
+/// single create-idempotent associated token account instruction. It may never be a
+/// transfer source, token authority, or hold any other role. Programs are limited to
+/// System, SPL Token and Associated Token, and exactly two signatures are required (fee
+/// payer and sender).
+fn check_sponsored_message(message: &Message, fee_payer: &Pubkey) -> Result<(), AppError> {
+    let refuse = |why: &str| {
+        Err(AppError::BadRequest(format!(
+            "transaction is not eligible for fee sponsorship: {why}"
+        )))
+    };
+
+    let keys = &message.account_keys;
+    if keys.first() != Some(fee_payer) {
+        return refuse("fee payer is not the first account");
+    }
+    if keys.iter().skip(1).any(|k| k == fee_payer) {
+        return refuse("fee payer appears more than once");
+    }
+    if message.header.num_required_signatures != 2 {
+        return refuse("expected exactly the fee payer and the sender to sign");
+    }
+
+    let system = program(SYSTEM_PROGRAM_ID);
+    let token = program(TOKEN_PROGRAM_ID);
+    let ata = program(ASSOCIATED_TOKEN_PROGRAM_ID);
+    let mut funded_creates = 0;
+
+    for ix in &message.instructions {
+        let Some(program_id) = keys.get(usize::from(ix.program_id_index)) else {
+            return refuse("instruction references a missing program");
+        };
+        if ![system, token, ata].contains(program_id) {
+            return refuse("instruction calls a program outside the allowlist");
+        }
+        for (position, &index) in ix.accounts.iter().enumerate() {
+            if index != 0 {
+                continue;
+            }
+            let is_ata_funder = *program_id == ata && position == 0 && ix.data == [1];
+            if !is_ata_funder {
+                return refuse("fee payer is used outside the fee payer role");
+            }
+            funded_creates += 1;
+        }
+    }
+    if funded_creates > 1 {
+        return refuse("fee payer funds more than one account");
+    }
+    Ok(())
+}
+
+/// Reads the transfer a signed message performs. Recognises the shapes `build_transfer`
+/// produces: one System transfer, or one SPL `transferChecked` optionally preceded by an
+/// associated token account create. Anything else returns `None`.
+///
+/// For a token transfer the recipient wallet is the owner named in the create
+/// instruction. Without one, `claimed_to` is accepted only if its associated token account
+/// is the transfer's destination.
+fn summarize_transfer(message: &Message, claimed_to: Option<&str>) -> Option<SignedTransfer> {
+    let keys = &message.account_keys;
+    let is_signer = |index: u8| index < message.header.num_required_signatures;
+    let key = |index: u8| keys.get(usize::from(index)).copied();
+
+    let system = program(SYSTEM_PROGRAM_ID);
+    let token = program(TOKEN_PROGRAM_ID);
+    let ata = program(ASSOCIATED_TOKEN_PROGRAM_ID);
+
+    // (ata, owner, mint) of a create instruction, if any.
+    let mut created: Option<(Pubkey, Pubkey, Pubkey)> = None;
+    let mut transfer: Option<SignedTransfer> = None;
+    let mut token_dest: Option<Pubkey> = None;
+
+    for ix in &message.instructions {
+        let program_id = key(ix.program_id_index)?;
+        let accounts = &ix.accounts;
+
+        if program_id == system && ix.data.len() == 12 && ix.data[..4] == 2u32.to_le_bytes() {
+            if transfer.is_some() || accounts.len() < 2 || !is_signer(accounts[0]) {
+                return None;
+            }
+            let lamports = u64::from_le_bytes(ix.data[4..12].try_into().ok()?);
+            transfer = Some(SignedTransfer {
+                from: key(accounts[0])?.to_string(),
+                to: Some(key(accounts[1])?.to_string()),
+                amount: u128::from(lamports),
+                mint: None,
+            });
+        } else if program_id == token && ix.data.len() == 10 && ix.data[0] == 12 {
+            if transfer.is_some() || accounts.len() < 4 || !is_signer(accounts[3]) {
+                return None;
+            }
+            let amount = u64::from_le_bytes(ix.data[1..9].try_into().ok()?);
+            token_dest = Some(key(accounts[2])?);
+            transfer = Some(SignedTransfer {
+                from: key(accounts[3])?.to_string(),
+                to: None,
+                amount: u128::from(amount),
+                mint: Some(key(accounts[1])?.to_string()),
+            });
+        } else if program_id == ata && matches!(ix.data.as_slice(), [] | [0] | [1]) {
+            if created.is_some() || accounts.len() < 4 {
+                return None;
+            }
+            created = Some((key(accounts[1])?, key(accounts[2])?, key(accounts[3])?));
+        } else {
+            return None;
+        }
+    }
+
+    let mut transfer = transfer?;
+    if let (Some(dest), Some(mint)) = (token_dest, transfer.mint.as_deref()) {
+        let mint = Pubkey::from_str(mint).ok()?;
+        transfer.to = match created {
+            Some((ata, owner, created_mint)) if ata == dest && created_mint == mint => {
+                Some(owner.to_string())
+            }
+            _ => claimed_to
+                .and_then(|c| Pubkey::from_str(c).ok())
+                .filter(|owner| associated_token_address(owner, &mint) == dest)
+                .map(|owner| owner.to_string()),
+        };
+    }
+    Some(transfer)
+}
+
 /// Maps a `sendTransaction` RPC error to an [`AppError`]. Expired blockhash is retryable
 /// by rebuilding; a rejected instruction is terminal.
 fn map_send_error(error: &serde_json::Value) -> AppError {
@@ -676,5 +921,259 @@ mod tests {
             AppError::ChainRejected(msg) => assert_eq!(msg, "custom program error: 0x1"),
             e => panic!("expected ChainRejected, got {e:?}"),
         }
+    }
+
+    /// An adapter that sponsors fees but whose RPC is unreachable. Anything rejected before
+    /// the first RPC call is rejected without the network; anything that gets further fails
+    /// with a network error.
+    fn sponsored_adapter() -> (SolanaAdapter, Pubkey) {
+        let paymaster = Keypair::new();
+        let pubkey = paymaster.pubkey();
+        let adapter = SolanaAdapter::new("http://127.0.0.1:9", "http://127.0.0.1:9", Some(paymaster));
+        (adapter, pubkey)
+    }
+
+    fn intent(from: &Pubkey, to: &Pubkey, mint: Option<&Pubkey>) -> TransferIntent {
+        TransferIntent {
+            from: from.to_string(),
+            to: to.to_string(),
+            amount: 1_000_000,
+            mint: mint.map(|m| m.to_string()),
+        }
+    }
+
+    /// The drain: `from` set to the paymaster would yield a message whose only required
+    /// signature is the paymaster's, which the backend itself supplies.
+    #[tokio::test]
+    async fn build_refuses_the_paymaster_as_sender() {
+        let (adapter, paymaster) = sponsored_adapter();
+        let attacker = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+
+        for mint in [None, Some(&mint)] {
+            let result = adapter.build_transfer(&intent(&paymaster, &attacker, mint)).await;
+            assert!(
+                matches!(result, Err(AppError::BadRequest(_))),
+                "paymaster as sender must be refused before signing"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn build_refuses_the_paymaster_as_recipient() {
+        let (adapter, paymaster) = sponsored_adapter();
+        let sender = Pubkey::new_unique();
+        let result = adapter.build_transfer(&intent(&sender, &paymaster, None)).await;
+        assert!(matches!(result, Err(AppError::InvalidRecipient)));
+    }
+
+    /// One sender cannot loop sponsored builds without limit.
+    #[tokio::test]
+    async fn sponsored_builds_are_capped_per_sender() {
+        let (adapter, _) = sponsored_adapter();
+        let sender = Pubkey::new_unique();
+        let to = Pubkey::new_unique();
+        for _ in 0..SPONSORED_BUILDS_PER_SENDER_PER_HOUR {
+            // Passes the cap, then fails reaching the (absent) RPC.
+            let result = adapter.build_transfer(&intent(&sender, &to, None)).await;
+            assert!(matches!(result, Err(AppError::Network(_))));
+        }
+        let over = adapter.build_transfer(&intent(&sender, &to, None)).await;
+        assert!(matches!(over, Err(AppError::RateLimited { .. })));
+
+        // Another sender still has its own budget.
+        let other = adapter
+            .build_transfer(&intent(&Pubkey::new_unique(), &to, None))
+            .await;
+        assert!(matches!(other, Err(AppError::Network(_))));
+    }
+
+    #[test]
+    fn sponsored_ata_creations_are_capped() {
+        let limits = SponsorLimits::new();
+        let sender = Pubkey::new_unique();
+        for _ in 0..SPONSORED_ATAS_PER_SENDER_PER_DAY {
+            limits.allow_ata_creation(&sender).unwrap();
+        }
+        assert!(limits.allow_ata_creation(&sender).is_err(), "per-sender cap");
+
+        // Fresh wallets each time still run into the global cap.
+        let remaining = SPONSORED_ATAS_GLOBAL_PER_HOUR - SPONSORED_ATAS_PER_SENDER_PER_DAY;
+        for _ in 0..remaining {
+            limits.allow_ata_creation(&Pubkey::new_unique()).unwrap();
+        }
+        assert!(limits.allow_ata_creation(&Pubkey::new_unique()).is_err(), "global cap");
+    }
+
+    fn sponsored_token_message(fee_payer: &Pubkey, sender: &Pubkey, to: &Pubkey) -> Message {
+        let mint = Pubkey::new_unique();
+        let dest = associated_token_address(to, &mint);
+        let source = associated_token_address(sender, &mint);
+        Message::new(
+            &[
+                create_ata_idempotent(fee_payer, to, &mint, &dest),
+                token_transfer_checked(&source, &mint, &dest, sender, 5, 6),
+            ],
+            Some(fee_payer),
+        )
+    }
+
+    #[test]
+    fn policy_accepts_the_messages_build_produces() {
+        let fee_payer = Pubkey::new_unique();
+        let sender = Pubkey::new_unique();
+        let to = Pubkey::new_unique();
+
+        let sol = Message::new(&[system_transfer(&sender, &to, 5).unwrap()], Some(&fee_payer));
+        check_sponsored_message(&sol, &fee_payer).expect("sponsored SOL send");
+
+        let token = sponsored_token_message(&fee_payer, &sender, &to);
+        check_sponsored_message(&token, &fee_payer).expect("sponsored token send");
+    }
+
+    /// The attack message itself, in case an input check is ever bypassed: the fee payer is
+    /// the transfer source and the only signer.
+    #[test]
+    fn policy_rejects_fee_payer_as_transfer_source() {
+        let fee_payer = Pubkey::new_unique();
+        let attacker = Pubkey::new_unique();
+
+        let drain = Message::new(
+            &[system_transfer(&fee_payer, &attacker, 5).unwrap()],
+            Some(&fee_payer),
+        );
+        assert!(check_sponsored_message(&drain, &fee_payer).is_err());
+
+        // Same drain with a second signer to satisfy the signature count.
+        let padded = Message::new(
+            &[
+                system_transfer(&attacker, &attacker, 0).unwrap(),
+                system_transfer(&fee_payer, &attacker, 5).unwrap(),
+            ],
+            Some(&fee_payer),
+        );
+        assert_eq!(padded.header.num_required_signatures, 2);
+        assert!(check_sponsored_message(&padded, &fee_payer).is_err());
+    }
+
+    #[test]
+    fn policy_rejects_fee_payer_in_any_other_role() {
+        let fee_payer = Pubkey::new_unique();
+        let sender = Pubkey::new_unique();
+        let mint = Pubkey::new_unique();
+
+        // Fee payer as token authority over its own token account.
+        let source = associated_token_address(&fee_payer, &mint);
+        let dest = associated_token_address(&sender, &mint);
+        let authority = Message::new(
+            &[
+                system_transfer(&sender, &sender, 0).unwrap(),
+                token_transfer_checked(&source, &mint, &dest, &fee_payer, 5, 6),
+            ],
+            Some(&fee_payer),
+        );
+        assert!(check_sponsored_message(&authority, &fee_payer).is_err());
+
+        // Fee payer as the owner of a created account rather than its funder.
+        let own_ata = associated_token_address(&fee_payer, &mint);
+        let as_owner = Message::new(
+            &[
+                create_ata_idempotent(&sender, &fee_payer, &mint, &own_ata),
+                system_transfer(&sender, &sender, 0).unwrap(),
+            ],
+            Some(&fee_payer),
+        );
+        assert!(check_sponsored_message(&as_owner, &fee_payer).is_err());
+
+        // Fee payer funding two accounts.
+        let to = Pubkey::new_unique();
+        let other = Pubkey::new_unique();
+        let mut two = vec![
+            create_ata_idempotent(&fee_payer, &to, &mint, &associated_token_address(&to, &mint)),
+            create_ata_idempotent(&fee_payer, &other, &mint, &associated_token_address(&other, &mint)),
+        ];
+        two.push(token_transfer_checked(&dest, &mint, &dest, &sender, 1, 6));
+        let two = Message::new(&two, Some(&fee_payer));
+        assert!(check_sponsored_message(&two, &fee_payer).is_err());
+    }
+
+    #[test]
+    fn policy_rejects_programs_outside_the_allowlist() {
+        let fee_payer = Pubkey::new_unique();
+        let sender = Pubkey::new_unique();
+        let foreign = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![AccountMeta::new(sender, true)],
+            data: vec![],
+        };
+        let message = Message::new(&[foreign], Some(&fee_payer));
+        assert!(check_sponsored_message(&message, &fee_payer).is_err());
+    }
+
+    #[test]
+    fn summary_reads_a_sol_transfer() {
+        let fee_payer = Pubkey::new_unique();
+        let sender = Pubkey::new_unique();
+        let to = Pubkey::new_unique();
+        let message = Message::new(&[system_transfer(&sender, &to, 42).unwrap()], Some(&fee_payer));
+
+        let summary = summarize_transfer(&message, None).expect("recognised");
+        assert_eq!(summary.from, sender.to_string());
+        assert_eq!(summary.to, Some(to.to_string()));
+        assert_eq!(summary.amount, 42);
+        assert_eq!(summary.mint, None);
+    }
+
+    #[test]
+    fn summary_reads_a_token_transfer_recipient() {
+        let fee_payer = Pubkey::new_unique();
+        let sender = Pubkey::new_unique();
+        let to = Pubkey::new_unique();
+
+        // With a create instruction the owner comes from the bytes.
+        let message = sponsored_token_message(&fee_payer, &sender, &to);
+        let summary = summarize_transfer(&message, Some("ignored")).expect("recognised");
+        assert_eq!(summary.from, sender.to_string());
+        assert_eq!(summary.to, Some(to.to_string()));
+        assert_eq!(summary.amount, 5);
+
+        // Without one, a claim is accepted only if it derives the destination account.
+        let mint = Pubkey::new_unique();
+        let dest = associated_token_address(&to, &mint);
+        let source = associated_token_address(&sender, &mint);
+        let bare = Message::new(
+            &[token_transfer_checked(&source, &mint, &dest, &sender, 5, 6)],
+            Some(&fee_payer),
+        );
+        let honest = summarize_transfer(&bare, Some(&to.to_string())).unwrap();
+        assert_eq!(honest.to, Some(to.to_string()));
+        assert_eq!(honest.mint, Some(mint.to_string()));
+        let liar = Pubkey::new_unique().to_string();
+        assert_eq!(summarize_transfer(&bare, Some(&liar)).unwrap().to, None);
+    }
+
+    #[test]
+    fn summary_ignores_unrecognised_transactions() {
+        let sender = Pubkey::new_unique();
+        let to = Pubkey::new_unique();
+        let foreign = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![AccountMeta::new(sender, true)],
+            data: vec![],
+        };
+        let mixed = Message::new(
+            &[system_transfer(&sender, &to, 1).unwrap(), foreign],
+            Some(&sender),
+        );
+        assert!(summarize_transfer(&mixed, None).is_none());
+
+        let double = Message::new(
+            &[
+                system_transfer(&sender, &to, 1).unwrap(),
+                system_transfer(&sender, &to, 1).unwrap(),
+            ],
+            Some(&sender),
+        );
+        assert!(summarize_transfer(&double, None).is_none());
     }
 }

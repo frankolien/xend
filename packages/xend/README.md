@@ -29,7 +29,13 @@ print(wallet.address); // base58 Solana address
 // Send. Money is always base units — never a double. `to` may be an address or a `.sol`
 // name, resolved automatically. Fees are sponsored by the backend when it runs a paymaster,
 // so the user needs no SOL. Signing happens on-device behind Face ID.
-final tx = await wallet.send(to: 'gift.sol', amount: BigInt.from(2000000)); // 0.002 SOL, in lamports
+final tx = await wallet.send(
+  to: 'gift.sol',
+  amount: BigInt.from(2000000), // 0.002 SOL, in lamports
+  // Face ID shows no transaction details, so show your own confirm sheet. It runs after
+  // the SDK has checked the transaction against this request, before biometrics.
+  confirm: (preview) => showConfirmSheet(preview),
+);
 
 // The stream never lies: pending → confirmed → finalized.
 await for (final status in wallet.watch(tx)) {
@@ -48,7 +54,8 @@ final usdc = await wallet.send(to: dest, amount: amt, asset: someToken); // any 
 final addr = await XendWallet.resolveName('gift.sol');   // show a name's address
 final sig  = await wallet.sign(bytes, reason: 'Sign in'); // wallet login / message signing
 final phrase = await wallet.revealRecoveryPhrase();       // optional export screen
-await wallet.delete();
+await wallet.delete();                    // this device only; the iCloud backup stays
+await wallet.delete(wipeBackup: true);    // removes the backup on every device too
 ```
 
 Unbuilt capabilities (`swap`, `bridge`, non-Solana chains) throw a typed `NotImplementedYet` —
@@ -57,7 +64,9 @@ Xend never fakes success.
 ## What you get
 
 - **Embedded onboarding.** `create()` is silent — no seed phrase, web2 feel. Recovery is
-  automatic across the user's Apple devices via end-to-end-encrypted iCloud Keychain.
+  automatic across the user's Apple devices via end-to-end-encrypted iCloud Keychain. That
+  backup is only as strong as the user's Apple ID and device passcode, and it is skipped if
+  iCloud Keychain is off; offer `revealRecoveryPhrase()` as an explicit export.
 - **Hardware signing.** Ed25519 key derived on-device (BIP-39 / SLIP-0010), wrapped by a
   Secure Enclave key, decrypted only for the microseconds of a Face ID-gated signature.
 - **Gasless.** When your backend runs a paymaster it becomes the fee payer, so users transact
@@ -65,6 +74,10 @@ Xend never fakes success.
 - **Names.** Send to `gift.sol`; the SDK resolves Solana Name Service domains transparently.
 - **Tokens.** SOL and any SPL token (USDC and friends); the recipient's token account is
   created automatically.
+- **No blind signing.** Before Face ID, the SDK decodes the transaction the backend built and
+  checks programs, signers, recipient, amount, and token against your request. A mismatch
+  throws `TransactionMismatch`, so a compromised backend cannot redirect funds. `sign()`
+  refuses bytes that are really a transaction.
 - **Truthful confirmations.** `watch()` reports pending → confirmed → finalized as it happens.
 
 ## Principles
@@ -72,13 +85,14 @@ Xend never fakes success.
 - **Keys never leave the device.** The backend is a witness, not a custodian.
 - **Hide the chain, not the truth.** Pending is pending; `confirmed` ≠ `finalized`.
 - **Typed failures.** Every error is a `XendError` you can `switch` on
-  (`NetworkError`, `InsufficientFunds`, `UserCancelledAuth`, `InvalidRecipient`, …).
+  (`NetworkError`, `InsufficientFunds`, `UserCancelledAuth`, `TransactionMismatch`,
+  `KeyInvalidated`, …).
 - **Integer money.** Base units end to end; decimals only at the UI edge.
 
 ## Links
 
-- [Architecture](https://github.com/EntryPointLabs/xend/blob/main/docs/01-ARCHITECTURE.md)
-- [Security model & threat model](https://github.com/EntryPointLabs/xend/blob/main/docs/04-SECURITY.md)
-- [Getting started](https://github.com/EntryPointLabs/xend/blob/main/docs/05-GETTING-STARTED.md)
+- [Architecture](https://github.com/frankolien/xend/blob/main/docs/01-ARCHITECTURE.md)
+- [Security model & threat model](https://github.com/frankolien/xend/blob/main/docs/04-SECURITY.md)
+- [Getting started](https://github.com/frankolien/xend/blob/main/docs/05-GETTING-STARTED.md)
 
 Licensed under Apache-2.0.

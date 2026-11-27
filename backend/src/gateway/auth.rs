@@ -11,22 +11,30 @@ use axum::response::Response;
 
 use crate::error::AppError;
 
+/// The API key a request authenticated with. Attached as a request extension once auth
+/// passes, so later layers (rate limiting) key on a validated value, not a raw header.
+#[derive(Clone, Debug)]
+pub struct ApiKeyIdentity(pub String);
+
 /// Whether `auth_header` is authorized against `keys`. An empty key set disables
 /// authentication (development mode) and allows everything.
 fn is_authorized(keys: &HashSet<String>, auth_header: Option<&str>) -> bool {
     if keys.is_empty() {
         return true;
     }
-    match auth_header.and_then(|h| h.strip_prefix("Bearer ")) {
-        Some(key) => keys.contains(key.trim()),
-        None => false,
-    }
+    validated_key(keys, auth_header).is_some()
+}
+
+/// The configured key matching `auth_header`, if any.
+fn validated_key<'a>(keys: &'a HashSet<String>, auth_header: Option<&str>) -> Option<&'a String> {
+    let presented = auth_header.and_then(|h| h.strip_prefix("Bearer "))?.trim();
+    keys.get(presented)
 }
 
 /// Rejects requests without a valid API key with `401 Unauthorized`.
 pub async fn require_api_key(
     State(keys): State<Arc<HashSet<String>>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
     let header = request
@@ -34,11 +42,13 @@ pub async fn require_api_key(
         .get("authorization")
         .and_then(|v| v.to_str().ok());
 
-    if is_authorized(&keys, header) {
-        Ok(next.run(request).await)
-    } else {
-        Err(AppError::Unauthorized)
+    if !is_authorized(&keys, header) {
+        return Err(AppError::Unauthorized);
     }
+    if let Some(key) = validated_key(&keys, header).cloned() {
+        request.extensions_mut().insert(ApiKeyIdentity(key));
+    }
+    Ok(next.run(request).await)
 }
 
 #[cfg(test)]

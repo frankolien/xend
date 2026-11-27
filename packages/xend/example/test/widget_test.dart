@@ -21,7 +21,9 @@ void main() {
     messenger.setMockMethodCallHandler(channel, null);
   });
 
-  testWidgets('shows "Create wallet" when the vault has no key', (tester) async {
+  testWidgets('shows "Create wallet" when the vault has no key', (
+    tester,
+  ) async {
     messenger.setMockMethodCallHandler(channel, (call) async {
       if (call.method == 'getPublicKey') return null; // no wallet yet
       return null;
@@ -31,20 +33,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Create wallet'), findsOneWidget);
-    expect(find.text('No wallet yet.'), findsOneWidget);
+    expect(find.text('No wallet yet'), findsOneWidget);
   });
 
-  testWidgets('shows the address when the vault already has a key', (tester) async {
+  testWidgets('shows the address when the vault already has a key', (
+    tester,
+  ) async {
     const fakeAddress = '7HEqBe5XA9T9K1T9BDz4HbBiwYsc56W2gSQ8jWsntFkX';
     messenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'getPublicKey') return fakeAddress; // restart read path
+      if (call.method == 'loadOrRecover') {
+        return {'address': fakeAddress, 'recovered': false}; // restart read path
+      }
       return null;
     });
 
     await tester.pumpWidget(const XendExampleApp());
     await tester.pumpAndSettle();
 
-    expect(find.text(fakeAddress), findsOneWidget);
-    expect(find.text('Your Solana address'), findsOneWidget);
+    expect(find.text('7HEqBe…sntFkX'), findsOneWidget); // shortened address
+    expect(find.text('Receive to'), findsOneWidget);
   });
 }

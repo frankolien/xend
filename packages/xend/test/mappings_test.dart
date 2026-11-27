@@ -121,19 +121,35 @@ void main() {
       );
     });
 
-    test('biometrics_unavailable -> NetworkError', () {
+    test('key_invalidated -> KeyInvalidated', () {
       expect(
-        mapNativeError(PlatformException(code: 'biometrics_unavailable')),
-        isA<NetworkError>(),
+        mapNativeError(PlatformException(code: 'key_invalidated')),
+        isA<KeyInvalidated>(),
       );
     });
 
-    test('unknown code -> NetworkError carrying the native message', () {
-      final e = mapNativeError(
-        PlatformException(code: 'enclave_error', message: 'boom'),
+    test('backup_unavailable -> BackupUnavailable', () {
+      expect(
+        mapNativeError(PlatformException(code: 'backup_unavailable')),
+        isA<BackupUnavailable>(),
       );
-      expect(e, isA<NetworkError>());
-      expect(e.message, contains('boom'));
+    });
+
+    test('biometrics_unavailable -> SecureElementError', () {
+      expect(
+        mapNativeError(PlatformException(code: 'biometrics_unavailable')),
+        isA<SecureElementError>(),
+      );
+    });
+
+    test('enclave and unknown codes are not retryable NetworkErrors', () {
+      for (final code in ['enclave_error', 'keychain_error', 'whatever']) {
+        final e =
+            mapNativeError(PlatformException(code: code, message: 'boom'));
+        expect(e, isA<SecureElementError>(), reason: code);
+        expect(e, isNot(isA<NetworkError>()), reason: code);
+        expect(e.message, contains('boom'));
+      }
     });
   });
 }
