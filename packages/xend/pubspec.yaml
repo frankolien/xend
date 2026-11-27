@@ -2,7 +2,7 @@ name: xend
 description: >-
   Embedded, non-custodial crypto payments for mobile apps: on-device Face ID signing,
   gasless fees, and .sol names behind a one-line send(). Solana + iOS in v0.1.
-version: 0.1.0
+version: 0.2.0
 homepage: https://github.com/frankolien/xend
 repository: https://github.com/frankolien/xend
 issue_tracker: https://github.com/frankolien/xend/issues
