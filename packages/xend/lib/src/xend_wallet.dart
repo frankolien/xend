@@ -9,6 +9,7 @@ import 'errors.dart';
 import 'mappings.dart';
 import 'models.dart';
 import 'secure_channel.dart';
+import 'tx_verify.dart';
 import 'wire.dart';
 
 /// A non-custodial wallet: an on-device key pair plus the operations to observe and move
@@ -139,10 +140,19 @@ class XendWallet {
     }
   }
 
-  /// Permanently removes this wallet's key material from the device's secure store.
+  /// Removes this wallet's signing key from this device.
   ///
-  /// This is irreversible: without the recovery phrase, the wallet cannot be recovered.
-  Future<void> delete() => const SecureChannel().deleteKey(_walletId);
+  /// By default the synced recovery seed is kept, so the wallet can still be loaded on
+  /// this or another device signed in to the same keychain. Pass [wipeBackup] to delete
+  /// the synced seed as well; that removes the wallet everywhere and is irreversible
+  /// without the recovery phrase.
+  Future<void> delete({bool wipeBackup = false}) async {
+    try {
+      await const SecureChannel().deleteKey(_walletId, wipeBackup: wipeBackup);
+    } on PlatformException catch (e) {
+      throw mapNativeError(e);
+    }
+  }
 
   /// Returns the balance of [asset], or the chain's native asset when [asset] is omitted,
   /// in the asset's smallest indivisible unit.
@@ -162,9 +172,21 @@ class XendWallet {
   /// submitted, without waiting for confirmation; use [watch] to observe it.
   ///
   /// [amount] is in the asset's smallest indivisible unit (lamports for SOL). [asset]
-  /// defaults to the native asset of [chain]. Supply [idempotencyKey] to make a retry
-  /// safe; if omitted, one is generated per call. [successAt] selects the commitment level
+  /// defaults to the native asset of [chain]. [successAt] selects the commitment level
   /// at which [watch] reports success.
+  ///
+  /// Before signing, the transaction the backend built is decoded and checked against
+  /// this request: recipient, amount, mint, signers, and the programs it calls. Any
+  /// difference throws [TransactionMismatch] and nothing is signed. Then [confirm], if
+  /// given, receives a [TransferPreview] to show the user; returning false throws
+  /// [UserCancelledAuth] without signing.
+  ///
+  /// [idempotencyKey] identifies one payment intent. Generate it once when the user
+  /// starts the payment and pass the same value on every retry of it, so at most one
+  /// transfer is broadcast. The backend binds a key to the first signed transaction it
+  /// sees, so a retry that reaches it after an earlier attempt was accepted fails with
+  /// [IdempotencyKeyReuse] rather than sending twice. If omitted, a fresh key is
+  /// generated for this call only.
   ///
   /// In this release the handle's id is the on-chain signature, which can be looked up on
   /// a block explorer. Pass a token [asset] (one with a `mint`) to send an SPL token such
@@ -173,7 +195,10 @@ class XendWallet {
   /// Throws:
   ///  * [InsufficientFunds] if the balance cannot cover the amount and fees.
   ///  * [InvalidRecipient] if [to] is not valid for [chain].
-  ///  * [UserCancelledAuth] if biometric authentication is dismissed.
+  ///  * [UserCancelledAuth] if biometric authentication is dismissed or [confirm]
+  ///    returns false.
+  ///  * [TransactionMismatch] if the built transaction differs from the request.
+  ///  * [KeyInvalidated] if a biometric change removed the signing key.
   ///  * [BlockhashExpired] if the validity window elapsed before broadcast.
   ///  * [ChainRejected] if the network rejected the transaction.
   ///  * [NetworkError] or [RateLimited] for transient failures that may be retried.
@@ -190,16 +215,25 @@ class XendWallet {
     Asset? asset,
     String? idempotencyKey,
     TxCommitment successAt = TxCommitment.confirmed,
+    Future<bool> Function(TransferPreview preview)? confirm,
   }) async {
     _requireSolana(chain, 'XendWallet.send');
     if (amount <= BigInt.zero) {
       throw ArgumentError.value(amount, 'amount', 'must be greater than zero');
     }
-    final mint = asset?.mint;
+    final key = idempotencyKey ?? newIdempotencyKey();
+    final rawMint = asset?.mint;
+    final mintBytes = rawMint == null ? null : decodeAddress(rawMint);
+    if (rawMint != null && mintBytes == null) {
+      throw ArgumentError.value(rawMint, 'asset.mint', 'not a valid address');
+    }
+    final mint = mintBytes == null ? null : base58Encode(mintBytes);
 
     // Resolve a `.sol` name to its address up front, so building, signing, and the
     // recorded recipient all use the same address. A plain address passes through.
-    final recipient = await resolveName(to);
+    final recipientBytes = decodeAddress(await resolveName(to));
+    if (recipientBytes == null) throw const InvalidRecipient();
+    final recipient = base58Encode(recipientBytes);
 
     // 1. The backend assembles the unsigned transfer, including the recent blockhash the
     //    device must not compute itself. For sponsored fees it also returns the fee
@@ -211,8 +245,33 @@ class XendWallet {
       mint: mint,
     );
     final message = base64Decode(built.message);
+    final sponsored = built.feePayerSignature != null;
 
-    // 2. Sign on-device behind biometric authentication. The private key stays in secure
+    // 2. Check the transaction does exactly what was asked before anything is signed.
+    final decimals = verifyTransfer(
+      message,
+      user: address,
+      recipient: recipient,
+      amount: amount,
+      mint: mint,
+      sponsored: sponsored,
+    );
+
+    // 3. The biometric prompt cannot show details, so let the app confirm them first.
+    if (confirm != null) {
+      final approved = await confirm(TransferPreview(
+        recipient: recipient,
+        recipientName: isSolName(to) ? to : null,
+        amount: amount,
+        asset: asset ?? Asset.native(chain),
+        mint: mint,
+        decimals: decimals,
+        sponsored: sponsored,
+      ));
+      if (!approved) throw const UserCancelledAuth('Transfer declined');
+    }
+
+    // 4. Sign on-device behind biometric authentication. The private key stays in secure
     //    hardware; only the 64-byte signature is returned.
     final Uint8List signature;
     try {
@@ -225,7 +284,7 @@ class XendWallet {
       throw mapNativeError(e);
     }
 
-    // 3. Assemble the signed transaction in wire format and broadcast it. A sponsored
+    // 5. Assemble the signed transaction in wire format and broadcast it. A sponsored
     //    transfer carries the fee payer's signature ahead of the sender's, in signer
     //    order; an unsponsored one carries the sender's alone. The idempotency key makes
     //    the whole build-sign-submit round trip safe to retry.
@@ -237,7 +296,7 @@ class XendWallet {
     final signed = assembleSignedTransaction(signatures, message);
     final result = await Xend.backend.submitTransaction(
       signed: base64Encode(signed),
-      idempotencyKey: idempotencyKey ?? newIdempotencyKey(),
+      idempotencyKey: key,
       from: address,
       to: recipient,
       amount: amount,
@@ -292,9 +351,13 @@ class XendWallet {
   /// approving. Useful for wallet-based sign-in and message signing, where the caller
   /// needs a signature without moving funds.
   ///
+  /// Bytes that decode as a Solana transaction message are refused with
+  /// [UnsafeSignRequest], so a sign-in request cannot carry a hidden transfer.
+  ///
   /// Throws [UserCancelledAuth] if the biometric prompt is dismissed.
   Future<List<int>> sign(List<int> message, {required String reason}) async {
     _requireSolana(chain, 'XendWallet.sign');
+    if (isTransactionMessage(message)) throw const UnsafeSignRequest();
     try {
       return await const SecureChannel().signMessage(
         _walletId,

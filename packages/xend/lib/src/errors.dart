@@ -110,3 +110,50 @@ final class NotImplementedYet extends XendError {
   const NotImplementedYet(String what)
       : super('$what is not available in this version');
 }
+
+/// The transaction returned by the backend does not match what was asked for, so it was
+/// not signed. See [reason].
+///
+/// Nothing was signed or submitted. Terminal: treat it as a fault or compromise of the
+/// backend, not a condition to retry around.
+final class TransactionMismatch extends XendError {
+  const TransactionMismatch(this.reason)
+      : super('Transaction does not match the request: $reason');
+
+  /// What differed, such as an unexpected recipient or amount.
+  final String reason;
+}
+
+/// [XendWallet.sign] was given bytes that decode as a Solana transaction message.
+///
+/// Signing them would authorize that transaction, so the request is refused. Use
+/// [XendWallet.send] to move funds. Terminal.
+final class UnsafeSignRequest extends XendError {
+  const UnsafeSignRequest(
+      [super.message = 'Refusing to sign bytes that form a transaction']);
+}
+
+/// The device signing key is gone because biometric enrollment changed (for example, a
+/// new face or fingerprint was added).
+///
+/// Terminal for this key. Load the wallet again to rebuild the key from its synced seed,
+/// or restore it from the recovery phrase.
+final class KeyInvalidated extends XendError {
+  const KeyInvalidated(
+      [super.message = 'Signing key invalidated by a biometric change']);
+}
+
+/// The recovery seed could not be backed up or read from the platform keychain sync, for
+/// example because iCloud Keychain is turned off.
+///
+/// The on-device key still works; only cross-device recovery is affected.
+final class BackupUnavailable extends XendError {
+  const BackupUnavailable([super.message = 'Keychain backup unavailable']);
+}
+
+/// The device's secure storage or secure element failed, or biometrics are unavailable.
+///
+/// Not a network condition. Retrying the same call rarely helps; check device settings.
+final class SecureElementError extends XendError {
+  const SecureElementError([super.message = 'Secure element error']);
+}
