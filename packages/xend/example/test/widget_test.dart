@@ -41,8 +41,8 @@ void main() {
   ) async {
     const fakeAddress = '7HEqBe5XA9T9K1T9BDz4HbBiwYsc56W2gSQ8jWsntFkX';
     messenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'getPublicKey') {
-        return fakeAddress; // restart read path
+      if (call.method == 'loadOrRecover') {
+        return {'address': fakeAddress, 'recovered': false}; // restart read path
       }
       return null;
     });
@@ -50,7 +50,7 @@ void main() {
     await tester.pumpWidget(const XendExampleApp());
     await tester.pumpAndSettle();
 
-    expect(find.text(fakeAddress), findsOneWidget);
-    expect(find.text('Your Solana address'), findsOneWidget);
+    expect(find.text('7HEqBe…sntFkX'), findsOneWidget); // shortened address
+    expect(find.text('Receive to'), findsOneWidget);
   });
 }

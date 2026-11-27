@@ -576,8 +576,12 @@ class _SendSheetState extends State<_SendSheet> {
       _error = null;
     });
     try {
-      // Triggers Face ID. The key is unwrapped, used once, then zeroed.
-      final tx = await widget.wallet.send(to: to, amount: lamports);
+      // The SDK checks the built transaction first, then asks us to confirm, then Face ID.
+      final tx = await widget.wallet.send(
+        to: to,
+        amount: lamports,
+        confirm: _confirm,
+      );
       if (mounted) Navigator.pop(context, tx.id);
     } on UserCancelledAuth {
       if (mounted) setState(() => _error = 'Authentication cancelled');
@@ -587,11 +591,43 @@ class _SendSheetState extends State<_SendSheet> {
       if (mounted) {
         setState(() => _error = 'Not a valid address or .sol name');
       }
+    } on TransactionMismatch {
+      if (mounted) {
+        setState(
+          () => _error = 'Blocked: the transaction did not match your request',
+        );
+      }
     } on XendError catch (e) {
       if (mounted) setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  // Face ID shows no transaction details, so the app shows them before biometrics.
+  Future<bool> _confirm(TransferPreview p) async {
+    final sol = (p.amount.toDouble() / 1e9).toStringAsFixed(4);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm transfer'),
+        content: Text(
+          'Send $sol SOL to\n${p.recipientName ?? p.recipient}'
+          '${p.sponsored ? '\n\nNetwork fee covered.' : ''}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
   }
 
   @override
