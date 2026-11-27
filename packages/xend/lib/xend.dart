@@ -8,7 +8,15 @@ library xend;
 export 'src/config.dart' show Xend, XendConfig;
 export 'src/xend_wallet.dart' show XendWallet;
 export 'src/models.dart'
-    show Chain, Asset, Balance, TxHandle, TxStatus, TxCommitment, TxRecord;
+    show
+        Chain,
+        Asset,
+        Balance,
+        TxHandle,
+        TxStatus,
+        TxCommitment,
+        TxRecord,
+        TransferPreview;
 export 'src/errors.dart'
     show
         XendError,
@@ -21,4 +29,9 @@ export 'src/errors.dart'
         InvalidRecoveryPhrase,
         RateLimited,
         ChainRejected,
+        TransactionMismatch,
+        UnsafeSignRequest,
+        KeyInvalidated,
+        BackupUnavailable,
+        SecureElementError,
         NotImplementedYet;

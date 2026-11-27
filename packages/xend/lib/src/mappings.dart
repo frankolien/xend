@@ -73,20 +73,23 @@ TxStatus txStatusFromBackend(TxHandle handle, String raw) {
   }
 }
 
-/// Maps a native secure-element failure to a typed [XendError]. A cancelled biometric
-/// prompt is the case callers branch on; other device failures surface as a retryable
-/// [NetworkError], since they mean the operation did not complete.
+/// Maps a native secure-element failure to a typed [XendError]. None of these are
+/// network conditions, so none map to the retryable [NetworkError].
 XendError mapNativeError(PlatformException e) {
   switch (e.code) {
     case 'user_cancelled_auth':
       return const UserCancelledAuth();
     case 'invalid_mnemonic':
       return const InvalidRecoveryPhrase();
+    case 'key_invalidated':
+      return const KeyInvalidated();
+    case 'backup_unavailable':
+      return const BackupUnavailable();
     case 'biometrics_unavailable':
-      return const NetworkError(
+      return const SecureElementError(
         'Biometric authentication is unavailable on this device',
       );
     default:
-      return NetworkError('secure element error: ${e.message ?? e.code}');
+      return SecureElementError('secure element error: ${e.message ?? e.code}');
   }
 }

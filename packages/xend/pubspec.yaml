@@ -3,9 +3,9 @@ description: >-
   Embedded, non-custodial crypto payments for mobile apps: on-device Face ID signing,
   gasless fees, and .sol names behind a one-line send(). Solana + iOS in v0.1.
 version: 0.1.0
-homepage: https://github.com/EntryPointLabs/xend
-repository: https://github.com/EntryPointLabs/xend
-issue_tracker: https://github.com/EntryPointLabs/xend/issues
+homepage: https://github.com/frankolien/xend
+repository: https://github.com/frankolien/xend
+issue_tracker: https://github.com/frankolien/xend/issues
 topics:
   - solana
   - payments
@@ -23,6 +23,7 @@ dependencies:
   # Deliberately minimal. The SDK talks HTTP/WS to the backend and the platform
   # channel to native — no Solana/crypto package leaks into the public surface.
   http: ^1.2.0 # backend REST client; web-socket client is added in Phase 5
+  crypto: ^3.0.3 # sha256 for associated token account derivation in tx_verify.dart
 
 dev_dependencies:
   flutter_test:
