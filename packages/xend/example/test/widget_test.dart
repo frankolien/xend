@@ -31,7 +31,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Create wallet'), findsOneWidget);
-    expect(find.text('No wallet yet.'), findsOneWidget);
+    expect(find.text('No wallet yet'), findsOneWidget);
   });
 
   testWidgets('shows the address when the vault already has a key', (tester) async {
